@@ -24,6 +24,7 @@
 #include "callbacks_thread.h"
 #include "callbacks_object.h"
 #include "callbacks_imageload.h"
+#include "callbacks_registry.h"
 #include "kapc_inject.h"
 
 /* ── Forward declarations ────────────────────────────────────────────────── */
@@ -101,6 +102,7 @@ SentinelFilterUnload(
 
     /* Unregister callbacks before tearing down comms (reverse init order) */
     SentinelKapcInjectStop();
+    SentinelRegistryCallbackStop();
     SentinelImageLoadCallbackStop();
     SentinelObjectCallbackStop();
     SentinelThreadCallbackStop();
@@ -245,16 +247,25 @@ DriverEntry(
         goto cleanup_object_cb;
     }
 
-    /* ── Step 9: Initialize KAPC injection ───────────────────────────── */
+    /* ── Step 9: Register registry callback ──────────────────────────── */
+
+    status = SentinelRegistryCallbackInit(DriverObject);
+    if (!NT_SUCCESS(status)) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "SentinelPOC: SentinelRegistryCallbackInit failed 0x%08X\n", status));
+        goto cleanup_imageload_cb;
+    }
+
+    /* ── Step 10: Initialize KAPC injection ──────────────────────────── */
 
     status = SentinelKapcInjectInit();
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
             "SentinelPOC: SentinelKapcInjectInit failed 0x%08X\n", status));
-        goto cleanup_imageload_cb;
+        goto cleanup_registry_cb;
     }
 
-    /* ── Step 10: Start filtering ──────────────────────────────────────── */
+    /* ── Step 11: Start filtering ──────────────────────────────────────── */
 
     status = FltStartFiltering(g_FilterHandle);
     if (!NT_SUCCESS(status)) {
@@ -272,6 +283,9 @@ DriverEntry(
 
 cleanup_kapc:
     SentinelKapcInjectStop();
+
+cleanup_registry_cb:
+    SentinelRegistryCallbackStop();
 
 cleanup_imageload_cb:
     SentinelImageLoadCallbackStop();

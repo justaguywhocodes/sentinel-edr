@@ -11,6 +11,7 @@ wdk_add_driver(sentinel-drv
     callbacks_thread.c
     callbacks_object.c
     callbacks_imageload.c
+    callbacks_registry.c
     kapc_inject.c
 )
 

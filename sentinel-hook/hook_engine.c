@@ -58,6 +58,21 @@ typedef struct _HOOK_ENTRY {
 static HOOK_ENTRY   g_Hooks[MAX_HOOKS];
 static BOOL         g_Initialized = FALSE;
 
+/*
+ * Pre-allocated trampoline pool.
+ * All trampoline memory is allocated in HookEngineInit() BEFORE any hooks
+ * are installed. This avoids calling VirtualAlloc after NtAllocateVirtualMemory
+ * is hooked — which fails under loader lock (ERROR_INVALID_HANDLE).
+ */
+static BYTE        *g_TrampolinePool = NULL;
+
+/*
+ * g_NtdllUnprotected — set once in HookEngineInit after we make all ntdll
+ * code pages PAGE_EXECUTE_READWRITE.  InstallHook / RemoveHook skip
+ * VirtualProtect entirely — the pages are already writable.
+ */
+static BOOL g_NtdllUnprotected = FALSE;
+
 /* ── Forward declarations ──────────────────────────────────────────────── */
 
 static DWORD SentinelGetInstructionLength(const BYTE *code);
@@ -460,6 +475,33 @@ WriteAbsoluteJmp(BYTE *dest, void *target)
     dest[11] = 0xE0;
 }
 
+/*
+ * Write a 14-byte register-safe absolute JMP.
+ *
+ *   FF 25 00 00 00 00         jmp qword ptr [rip+0]
+ *   <8-byte address>          (inline data, not executed)
+ *
+ * This does NOT clobber any registers — critical for trampoline JMP-backs
+ * where EAX holds the syscall number. WriteAbsoluteJmp (mov rax; jmp rax)
+ * is fine for the hook entry patch (RAX is caller-saved at function entry)
+ * but would destroy EAX in the trampoline, causing STATUS_INVALID_SYSTEM_SERVICE.
+ */
+#define JMP_RIP_SIZE 14
+
+static void
+WriteRipRelativeJmp(BYTE *dest, void *target)
+{
+    /* jmp qword ptr [rip+0] */
+    dest[0] = 0xFF;
+    dest[1] = 0x25;
+    dest[2] = 0x00;
+    dest[3] = 0x00;
+    dest[4] = 0x00;
+    dest[5] = 0x00;
+    /* 8-byte address immediately follows */
+    *(UINT64 *)(dest + 6) = (UINT64)target;
+}
+
 /* ── Find a free hook slot ─────────────────────────────────────────────── */
 
 static HOOK_ENTRY *
@@ -498,6 +540,66 @@ HookEngineInit(void)
     }
 
     ZeroMemory(g_Hooks, sizeof(g_Hooks));
+
+    /*
+     * Pre-allocate ALL trampoline memory NOW, before any hooks are installed.
+     * Once NtAllocateVirtualMemory is hooked, subsequent VirtualAlloc calls
+     * go through the detour and fail with ERROR_INVALID_HANDLE under loader lock.
+     */
+    g_TrampolinePool = (BYTE *)VirtualAlloc(
+        NULL, (SIZE_T)MAX_HOOKS * TRAMPOLINE_SIZE,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_EXECUTE_READWRITE);
+
+    if (!g_TrampolinePool) {
+        return FALSE;
+    }
+
+    /* Assign each hook slot its pre-allocated trampoline region */
+    for (int i = 0; i < MAX_HOOKS; i++) {
+        g_Hooks[i].Trampoline = g_TrampolinePool + ((SIZE_T)i * TRAMPOLINE_SIZE);
+    }
+
+    /*
+     * Pre-unprotect all ntdll code pages BEFORE any hooks are installed.
+     *
+     * Problem: InstallHook needs to make ntdll code writable (VirtualProtect).
+     * But VirtualProtect (kernel32) internally calls NtProtectVirtualMemory
+     * (ntdll). Once we hook NtProtectVirtualMemory, all subsequent
+     * VirtualProtect calls go through the detour and fail under loader lock.
+     *
+     * Solution: Make all ntdll executable pages PAGE_EXECUTE_READWRITE now,
+     * using VirtualProtect which is safe because no hooks exist yet.
+     * InstallHook / RemoveHook then skip VirtualProtect entirely.
+     */
+    {
+        HMODULE hNtdll = GetModuleHandleA("ntdll.dll");
+        if (hNtdll) {
+            BYTE *addr = (BYTE *)hNtdll;
+            MEMORY_BASIC_INFORMATION mbi;
+
+            while (VirtualQuery(addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                /* Stop when we leave ntdll's allocation */
+                if (mbi.AllocationBase != (PVOID)hNtdll)
+                    break;
+
+                /* Make executable pages writable */
+                if (mbi.Protect == PAGE_EXECUTE_READ ||
+                    mbi.Protect == PAGE_EXECUTE) {
+                    DWORD oldProt;
+                    VirtualProtect(mbi.BaseAddress, mbi.RegionSize,
+                                   PAGE_EXECUTE_READWRITE, &oldProt);
+                }
+
+                addr = (BYTE *)mbi.BaseAddress + mbi.RegionSize;
+            }
+
+            g_NtdllUnprotected = TRUE;
+            DIAG_LOG("HookEngine: INIT ntdll pages pre-unprotected (%u regions)\r\n",
+                     (unsigned)(addr - (BYTE *)hNtdll));
+        }
+    }
+
     g_Initialized = TRUE;
 
     /* No OutputDebugStringA here — runs under loader lock during DllMain */
@@ -514,6 +616,13 @@ HookEngineCleanup(void)
     }
 
     RemoveAllHooks();
+
+    /* Free the trampoline pool */
+    if (g_TrampolinePool) {
+        VirtualFree(g_TrampolinePool, 0, MEM_RELEASE);
+        g_TrampolinePool = NULL;
+    }
+
     g_Initialized = FALSE;
 }
 
@@ -532,7 +641,6 @@ InstallHook(
     HOOK_ENTRY *entry;
     BYTE       *trampoline;
     DWORD       stolenSize;
-    DWORD       oldProtect;
     const BYTE *ip;
 
     if (!g_Initialized || !ModuleName || !FunctionName ||
@@ -591,28 +699,22 @@ InstallHook(
         return FALSE;
     }
 
-    /* Allocate executable trampoline */
-    trampoline = (BYTE *)VirtualAlloc(
-        NULL, TRAMPOLINE_SIZE,
-        MEM_COMMIT | MEM_RESERVE,
-        PAGE_EXECUTE_READWRITE);
-
+    /* Use pre-allocated trampoline from pool (assigned in HookEngineInit) */
+    trampoline = (BYTE *)entry->Trampoline;
     if (!trampoline) {
-        DIAG_LOG("HookEngine: VALLOC %-28s failed err=%lu\r\n",
-                 FunctionName, GetLastError());
+        DIAG_LOG("HookEngine: POOL  %-28s trampoline is NULL\r\n", FunctionName);
         return FALSE;
     }
 
-    /* Build trampoline: stolen bytes + JMP to (target + stolenSize) */
+    /* Build trampoline: stolen bytes + register-safe JMP to (target + stolenSize) */
     memcpy(trampoline, (const void *)target, stolenSize);
-    WriteAbsoluteJmp(trampoline + stolenSize, (BYTE *)target + stolenSize);
+    WriteRipRelativeJmp(trampoline + stolenSize, (BYTE *)target + stolenSize);
 
     /* Save original bytes for unhooking */
     memcpy(entry->OriginalBytes, (const void *)target, stolenSize);
     entry->StolenSize  = stolenSize;
     entry->TargetFunc  = (void *)target;
     entry->DetourFunc  = DetourFunc;
-    entry->Trampoline  = trampoline;
 
     /* Save names for lookup */
     strncpy_s(entry->ModuleName, sizeof(entry->ModuleName),
@@ -620,12 +722,16 @@ InstallHook(
     strncpy_s(entry->FunctionName, sizeof(entry->FunctionName),
               FunctionName, _TRUNCATE);
 
-    /* Patch target: write absolute JMP to detour, pad remaining with NOP */
-    if (!VirtualProtect((void *)target, stolenSize,
-                        PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        DIAG_LOG("HookEngine: VPROT %-28s failed err=%lu\r\n",
-                 FunctionName, GetLastError());
-        VirtualFree(trampoline, 0, MEM_RELEASE);
+    /*
+     * Patch target: write JMP to detour.
+     * ntdll pages were pre-unprotected in HookEngineInit() — no need for
+     * VirtualProtect here. This avoids the chicken-and-egg problem where
+     * VirtualProtect internally calls NtProtectVirtualMemory which we've
+     * already hooked.
+     */
+    if (!g_NtdllUnprotected) {
+        DIAG_LOG("HookEngine: VPROT %-28s ntdll not pre-unprotected\r\n",
+                 FunctionName);
         return FALSE;
     }
 
@@ -637,8 +743,6 @@ InstallHook(
                stolenSize - JMP_ABS_SIZE);
     }
 
-    /* Restore original protection */
-    VirtualProtect((void *)target, stolenSize, oldProtect, &oldProtect);
     FlushInstructionCache(GetCurrentProcess(), (void *)target, stolenSize);
 
     entry->Active = TRUE;
@@ -659,7 +763,6 @@ RemoveHook(
 )
 {
     HOOK_ENTRY *entry;
-    DWORD       oldProtect;
 
     if (!g_Initialized) {
         return FALSE;
@@ -670,23 +773,19 @@ RemoveHook(
         return FALSE;
     }
 
-    /* Restore original bytes */
-    if (VirtualProtect(entry->TargetFunc, entry->StolenSize,
-                       PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        memcpy(entry->TargetFunc, entry->OriginalBytes, entry->StolenSize);
-        VirtualProtect(entry->TargetFunc, entry->StolenSize,
-                       oldProtect, &oldProtect);
-        FlushInstructionCache(GetCurrentProcess(),
-                              entry->TargetFunc, entry->StolenSize);
-    }
+    /* Restore original bytes — ntdll pages are still PAGE_EXECUTE_READWRITE */
+    memcpy(entry->TargetFunc, entry->OriginalBytes, entry->StolenSize);
+    FlushInstructionCache(GetCurrentProcess(),
+                          entry->TargetFunc, entry->StolenSize);
 
-    /* Free trampoline */
-    if (entry->Trampoline) {
-        VirtualFree(entry->Trampoline, 0, MEM_RELEASE);
-    }
-
-    /* Clear entry */
-    ZeroMemory(entry, sizeof(HOOK_ENTRY));
+    /* Trampoline is from pool — don't free individually, just clear slot */
+    entry->Active = FALSE;
+    entry->TargetFunc = NULL;
+    entry->DetourFunc = NULL;
+    entry->StolenSize = 0;
+    ZeroMemory(entry->OriginalBytes, sizeof(entry->OriginalBytes));
+    entry->ModuleName[0] = '\0';
+    entry->FunctionName[0] = '\0';
 
     return TRUE;
 }
@@ -698,26 +797,18 @@ RemoveAllHooks(void)
 {
     for (int i = 0; i < MAX_HOOKS; i++) {
         if (g_Hooks[i].Active) {
-            DWORD oldProtect;
+            /* Restore original bytes — ntdll pages are still RWX */
+            memcpy(g_Hooks[i].TargetFunc, g_Hooks[i].OriginalBytes,
+                   g_Hooks[i].StolenSize);
+            FlushInstructionCache(GetCurrentProcess(),
+                                  g_Hooks[i].TargetFunc,
+                                  g_Hooks[i].StolenSize);
 
-            /* Restore original bytes */
-            if (VirtualProtect(g_Hooks[i].TargetFunc, g_Hooks[i].StolenSize,
-                               PAGE_EXECUTE_READWRITE, &oldProtect)) {
-                memcpy(g_Hooks[i].TargetFunc, g_Hooks[i].OriginalBytes,
-                       g_Hooks[i].StolenSize);
-                VirtualProtect(g_Hooks[i].TargetFunc, g_Hooks[i].StolenSize,
-                               oldProtect, &oldProtect);
-                FlushInstructionCache(GetCurrentProcess(),
-                                      g_Hooks[i].TargetFunc,
-                                      g_Hooks[i].StolenSize);
-            }
-
-            /* Free trampoline */
-            if (g_Hooks[i].Trampoline) {
-                VirtualFree(g_Hooks[i].Trampoline, 0, MEM_RELEASE);
-            }
-
-            ZeroMemory(&g_Hooks[i], sizeof(HOOK_ENTRY));
+            /* Trampoline is from pool — don't free individually */
+            g_Hooks[i].Active = FALSE;
+            g_Hooks[i].TargetFunc = NULL;
+            g_Hooks[i].DetourFunc = NULL;
+            g_Hooks[i].StolenSize = 0;
         }
     }
 }

@@ -4,8 +4,10 @@
  *
  * Provides:
  *   - Target PID resolution from process handle
- *   - Calling module lookup from return address
- *   - Hook event emission (OutputDebugString for now, pipe in P3-T4)
+ *   - Calling module lookup from return address (loader-lock-safe)
+ *   - Hook event emission (file log for now, named pipe in P3-T4)
+ *   - Per-thread reentrancy guard (manual TLS)
+ *   - Stack hash computation (disabled — deadlocks under loader lock)
  */
 
 #ifndef SENTINEL_HOOKS_COMMON_H
@@ -23,8 +25,9 @@ ULONG SentinelGetTargetPid(HANDLE ProcessHandle);
 
 /*
  * SentinelGetCallingModule
- *   Given a return address, resolve the module that contains it.
- *   Writes the full module path into buf (up to bufLen WCHARs).
+ *   Given a return address, resolve the allocation base of the module
+ *   that contains it via VirtualQuery. Writes hex address into buf.
+ *   Loader-lock-safe (no PEB module list walking).
  */
 void SentinelGetCallingModule(
     ULONG_PTR   ReturnAddress,
@@ -34,8 +37,8 @@ void SentinelGetCallingModule(
 
 /*
  * SentinelEmitHookEvent
- *   Emit a hook event. Currently logs via OutputDebugStringA.
- *   P3-T4 will replace this with named pipe send.
+ *   Emit a hook event to the diagnostic log file.
+ *   P3-T4 will replace this with named pipe send to the agent.
  */
 void SentinelEmitHookEvent(SENTINEL_HOOK_EVENT *evt);
 
@@ -63,10 +66,18 @@ void SentinelTlsInit(void);
 void SentinelTlsCleanup(void);
 
 /*
+ * SentinelLogInit / SentinelLogCleanup
+ *   Pre-open/close the event log file handle. Using a persistent handle
+ *   avoids CreateFileA/CloseHandle per event (too much overhead during
+ *   process startup when hundreds of hooks fire).
+ */
+void SentinelLogInit(void);
+void SentinelLogCleanup(void);
+
+/*
  * SentinelEnterHook / SentinelLeaveHook
  *   Per-thread reentrancy guard. Prevents infinite recursion when
- *   hook emit code (OutputDebugStringA, GetModuleHandleExW, etc.)
- *   internally calls hooked ntdll functions.
+ *   hook capture code internally calls hooked ntdll functions.
  *
  *   Usage in every detour:
  *     NTSTATUS status = Original_Nt...(args);
@@ -89,7 +100,10 @@ void InstallProcessHooks(void);
 /*
  * SentinelCaptureStackHash
  *   Compute a hash of the current call stack for behavioral correlation.
- *   Uses RtlCaptureStackBackTrace (ntdll) — safe from hook context.
+ *
+ *   CURRENTLY DISABLED: RtlCaptureStackBackTrace deadlocks under loader
+ *   lock (RtlVirtualUnwind acquires SRW lock for .pdata function tables).
+ *   Returns 0 until P3-T4 adds loader-lock detection or defers to agent.
  */
 ULONG SentinelCaptureStackHash(void);
 

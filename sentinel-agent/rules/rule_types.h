@@ -41,12 +41,30 @@ struct RuleCondition {
     std::string     value;      /* Comparison value */
 };
 
-/* ── Detection rule ──────────────────────────────────────────────────────── */
+/* ── Detection rule (single-event) ──────────────────────────────────────── */
 
 struct DetectionRule {
     std::string                         name;
     std::vector<SENTINEL_EVENT_SOURCE>  sources;    /* Empty = match all */
     std::vector<RuleCondition>          conditions; /* AND logic */
+    SENTINEL_SEVERITY                   severity;
+    RuleAction                          action;
+    bool                                enabled;
+};
+
+/* ── Sequence rule types (P4-T4) ────────────────────────────────────────── */
+
+/* A single step in a sequence rule — all conditions must match (AND). */
+struct SequenceStep {
+    std::vector<RuleCondition> conditions;
+};
+
+/* A multi-step sequence detection rule with time window. */
+struct SequenceRule {
+    std::string                         name;
+    std::vector<SENTINEL_EVENT_SOURCE>  sources;      /* Empty = match all */
+    std::vector<SequenceStep>           steps;        /* Ordered steps */
+    DWORD                               timeWindowMs; /* Max ms for full seq */
     SENTINEL_SEVERITY                   severity;
     RuleAction                          action;
     bool                                enabled;

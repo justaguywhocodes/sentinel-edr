@@ -6,6 +6,7 @@
  * files. No external YAML library — just line-by-line parsing.
  *
  * P4-T3: Single-Event Rule Engine.
+ * P4-T4: Sequence Rule Engine.
  */
 
 #ifndef SENTINEL_RULE_PARSER_H
@@ -17,17 +18,31 @@
 
 class RuleParser {
 public:
-    /* Parse a single .yaml file. May contain multiple rules separated by ---. */
+    /* Parse a single .yaml file for single-event rules. */
     static bool ParseFile(const std::string& path,
                           std::vector<DetectionRule>& rules);
 
-    /* Parse all .yaml files in a directory. */
+    /* Parse all .yaml files in a directory for single-event rules. */
     static bool ParseDirectory(const std::string& dirPath,
                                std::vector<DetectionRule>& rules);
+
+    /* Parse sequence rules from a single .yaml file. */
+    static bool ParseSequenceFile(const std::string& path,
+                                  std::vector<SequenceRule>& rules);
+
+    /* Parse all sequence rules from .yaml files in a directory. */
+    static bool ParseSequenceDirectory(const std::string& dirPath,
+                                       std::vector<SequenceRule>& rules);
 
 private:
     static bool ParseRule(const std::vector<std::string>& lines,
                           DetectionRule& rule);
+
+    static bool ParseSequenceRule(const std::vector<std::string>& lines,
+                                  SequenceRule& rule);
+
+    /* Check if a block has type: sequence. */
+    static bool IsSequenceBlock(const std::vector<std::string>& lines);
 
     static ConditionOp         ParseOp(const std::string& op);
     static SENTINEL_SEVERITY   ParseSeverity(const std::string& sev);

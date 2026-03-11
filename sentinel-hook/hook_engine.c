@@ -17,13 +17,20 @@
  */
 
 #include <windows.h>
+#include <stdio.h>
 #include "hook_engine.h"
 
 /* ── Diagnostic logging helper ────────────────────────────────────────── */
 
+/*
+ * LOADER-LOCK SAFETY: Uses _snprintf_s (CRT, no locks) instead of
+ * wsprintfA (user32.dll — creates a static import dependency that
+ * causes STATUS_DLL_INIT_FAILED during early KAPC injection because
+ * user32.dll cannot initialize before the process connects to csrss).
+ */
 #define DIAG_LOG(fmt, ...) do {                                             \
     char _dbuf[300];                                                        \
-    wsprintfA(_dbuf, fmt, __VA_ARGS__);                                     \
+    _snprintf_s(_dbuf, sizeof(_dbuf), _TRUNCATE, fmt, __VA_ARGS__);         \
     HANDLE _hd = CreateFileA("C:\\SentinelPOC\\hook_diag.log",              \
         FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,              \
         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);                   \

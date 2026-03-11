@@ -482,12 +482,44 @@ SentinelEventInit(
 )
 {
     ZeroMemory(Event, sizeof(SENTINEL_EVENT));
-    CoCreateGuid(&Event->EventId);
 
-    FILETIME ft;
-    GetSystemTimePreciseAsFileTime(&ft);
-    Event->Timestamp.LowPart  = ft.dwLowDateTime;
-    Event->Timestamp.HighPart = (LONG)ft.dwHighDateTime;
+    /*
+     * GUID generation: try CoCreateGuid dynamically from ole32.dll.
+     * We use GetModuleHandleA (not LoadLibraryA) to avoid loading ole32
+     * if it isn't already present — critical for the hook DLL which is
+     * injected via KAPC during early process creation, when ole32.dll
+     * cannot initialize (STATUS_DLL_INIT_FAILED).
+     *
+     * Fallback: pseudo-GUID from PID + TID + counter + perf counter.
+     * Not RFC 4122 compliant but unique enough for POC correlation.
+     */
+    {
+        typedef LONG (__stdcall *PFN_CoCreateGuid)(GUID*);
+        HMODULE hOle = GetModuleHandleA("ole32.dll");
+        PFN_CoCreateGuid pfn = hOle
+            ? (PFN_CoCreateGuid)(void*)GetProcAddress(hOle, "CoCreateGuid")
+            : NULL;
+
+        if (pfn && pfn(&Event->EventId) == 0) {
+            /* Success — real GUID */
+        } else {
+            /* Fallback: pseudo-GUID */
+            static volatile LONG s_counter = 0;
+            LARGE_INTEGER pc;
+            QueryPerformanceCounter(&pc);
+            Event->EventId.Data1 = GetCurrentProcessId();
+            Event->EventId.Data2 = (unsigned short)GetCurrentThreadId();
+            Event->EventId.Data3 = (unsigned short)InterlockedIncrement(&s_counter);
+            *(LONGLONG*)Event->EventId.Data4 = pc.QuadPart;
+        }
+    }
+
+    {
+        FILETIME ft;
+        GetSystemTimePreciseAsFileTime(&ft);
+        Event->Timestamp.LowPart  = ft.dwLowDateTime;
+        Event->Timestamp.HighPart = (LONG)ft.dwHighDateTime;
+    }
 
     Event->Source   = Source;
     Event->Severity = Severity;

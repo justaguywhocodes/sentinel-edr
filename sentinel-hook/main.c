@@ -12,6 +12,7 @@
  */
 
 #include <windows.h>
+#include <stdio.h>
 #include "hook_engine.h"
 #include "hooks_common.h"
 #include "pipe_client.h"
@@ -21,8 +22,6 @@
 static void
 InstallAllHooks(void)
 {
-    char buf[256];
-
     HookEngineInit();
 
     /* P3-T2: Core injection-detection hooks */
@@ -33,11 +32,25 @@ InstallAllHooks(void)
     /* P3-T3: Process hooks */
     InstallProcessHooks();      /* NtOpenProcess */
 
-    /* One-time init log — wsprintfA/OutputDebugStringA are safe here
-       because hooks haven't been armed yet (g_HooksReady is FALSE). */
-    wsprintfA(buf, "SentinelHook: PID=%lu hooks=%d ready\n",
-              GetCurrentProcessId(), HookEngineGetInstallCount());
-    OutputDebugStringA(buf);
+    /*
+     * One-time init log. Uses _snprintf_s (CRT) + WriteFile (kernel32)
+     * instead of wsprintfA (user32) + OutputDebugStringA (DBWIN mutex).
+     * Both user32 and DBWIN are unsafe during early KAPC injection.
+     */
+    {
+        char buf[256];
+        DWORD written;
+        _snprintf_s(buf, sizeof(buf), _TRUNCATE,
+                    "SentinelHook: PID=%lu hooks=%d ready\r\n",
+                    GetCurrentProcessId(), HookEngineGetInstallCount());
+        HANDLE hLog = CreateFileA("C:\\SentinelPOC\\hook_diag.log",
+            FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hLog != INVALID_HANDLE_VALUE) {
+            WriteFile(hLog, buf, (DWORD)lstrlenA(buf), &written, NULL);
+            CloseHandle(hLog);
+        }
+    }
 }
 
 static void

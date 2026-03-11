@@ -10,6 +10,7 @@ add_executable(sentinel-agent
     json_writer.cpp
     rules/rule_engine.cpp
     rules/rule_parser.cpp
+    rules/sequence_engine.cpp
 )
 
 target_include_directories(sentinel-agent PRIVATE

@@ -35,24 +35,29 @@ public:
     /* Number of loaded rules. */
     size_t RuleCount() const { return m_rules.size(); }
 
+    /*
+     * Evaluate a single condition against an event.
+     * Public static so SequenceEngine can reuse it.
+     */
+    static bool EvaluateCondition(const SENTINEL_EVENT& evt,
+                                  const RuleCondition& cond,
+                                  ProcessTable& processTable);
+
+    /*
+     * Resolve a dot-notation field path to a string value.
+     * e.g., "process.imagePath" → "C:\\Windows\\notepad.exe"
+     * Public static so SequenceEngine can reuse it.
+     */
+    static std::string ResolveField(const SENTINEL_EVENT& evt,
+                                    const std::string& field,
+                                    ProcessTable& processTable);
+
 private:
     std::vector<DetectionRule> m_rules;
 
     bool MatchesRule(const SENTINEL_EVENT& evt,
                      const DetectionRule& rule,
                      ProcessTable& processTable);
-
-    bool EvaluateCondition(const SENTINEL_EVENT& evt,
-                           const RuleCondition& cond,
-                           ProcessTable& processTable);
-
-    /*
-     * Resolve a dot-notation field path to a string value.
-     * e.g., "process.imagePath" → "C:\\Windows\\notepad.exe"
-     */
-    std::string ResolveField(const SENTINEL_EVENT& evt,
-                             const std::string& field,
-                             ProcessTable& processTable);
 };
 
 #endif /* SENTINEL_RULE_ENGINE_H */

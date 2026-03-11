@@ -1,0 +1,30 @@
+# Detection: Shellcode Runner Pattern
+# ATT&CK: T1055 - Process Injection
+# Detects the classic alloc(RW) → protect(RX) → create_thread sequence
+# within 5 seconds from the same process.
+
+type: sequence
+name: Shellcode Runner Pattern
+source: HookDll
+severity: critical
+action: LOG
+time_window: 5000
+steps:
+  - conditions:
+    - field: payload.function
+      op: equals
+      value: NtAllocateVirtualMemory
+    - field: payload.protection
+      op: equals
+      value: "0x4"
+  - conditions:
+    - field: payload.function
+      op: equals
+      value: NtProtectVirtualMemory
+    - field: payload.protection
+      op: equals
+      value: "0x20"
+  - conditions:
+    - field: payload.function
+      op: equals
+      value: NtCreateThreadEx

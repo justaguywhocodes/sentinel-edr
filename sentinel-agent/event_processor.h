@@ -8,6 +8,7 @@
  *
  * P4-T2: Event Processing & JSON Logging.
  * P4-T3: Single-Event Rule Engine.
+ * P4-T4: Sequence Rule Engine.
  */
 
 #ifndef SENTINEL_EVENT_PROCESSOR_H
@@ -18,6 +19,7 @@
 #include "process_table.h"
 #include "json_writer.h"
 #include "rules/rule_engine.h"
+#include "rules/sequence_engine.h"
 
 class EventProcessor {
 public:
@@ -31,10 +33,11 @@ public:
     /*
      * Process a single event:
      *   1. Update process table
-     *   2. Evaluate detection rules → emit alerts
-     *   3. Enrich with parent image path
-     *   4. Write JSON to log file
-     *   5. Print summary to stdout (console mode)
+     *   2. Evaluate single-event detection rules → emit alerts
+     *   3. Evaluate sequence detection rules → emit alerts
+     *   4. Enrich with parent image path
+     *   5. Write JSON to log file
+     *   6. Print summary to stdout (console mode)
      */
     void Process(const SENTINEL_EVENT& evt);
 
@@ -45,9 +48,10 @@ public:
     ULONGLONG EventsProcessed() const { return m_eventsProcessed; }
 
 private:
-    ProcessTable    m_processTable;
-    RuleEngine      m_ruleEngine;
-    JsonWriter      m_jsonWriter;
+    ProcessTable      m_processTable;
+    RuleEngine        m_ruleEngine;
+    SequenceEngine    m_sequenceEngine;
+    JsonWriter        m_jsonWriter;
     ULONGLONG       m_eventsProcessed = 0;
 
     void PrintSummary(const SENTINEL_EVENT& evt);

@@ -101,12 +101,15 @@ EventProcessor::PrintSummary(const SENTINEL_EVENT& evt)
         };
         const char* opName = (file.Operation >= 0 && file.Operation <= 4)
             ? fileOpNames[file.Operation] : "UNKNOWN";
-        std::printf("[%llu] source=%s %s pid=%lu path=%S\n",
+        std::printf("[%llu] source=%s %s pid=%lu path=%S size=%lld hash=%s%s\n",
                     m_eventsProcessed,
                     SourceName(evt.Source),
                     opName,
                     file.RequestingProcessId,
-                    file.FilePath);
+                    file.FilePath,
+                    file.FileSize.QuadPart,
+                    file.Sha256Hex[0] ? file.Sha256Hex : "(none)",
+                    file.HashSkipped ? " [skipped]" : "");
     } else if (evt.Source == SentinelSourceDriverProcess) {
         const auto& proc = evt.Payload.Process;
         std::printf("[%llu] source=%s %s pid=%lu ppid=%lu\n",

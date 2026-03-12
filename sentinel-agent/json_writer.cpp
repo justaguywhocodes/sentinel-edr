@@ -693,6 +693,10 @@ JsonWriter::FilePayloadToJson(const SENTINEL_FILE_EVENT& file)
         json += "\"";
     }
 
+    if (file.HashSkipped) {
+        json += ",\"hashSkipped\":true";
+    }
+
     json += '}';
     return json;
 }

@@ -27,6 +27,7 @@
 #include "callbacks_registry.h"
 #include "kapc_inject.h"
 #include "minifilter.h"
+#include "file_hash.h"
 
 /* ── Forward declarations ────────────────────────────────────────────────── */
 
@@ -104,6 +105,7 @@ SentinelFilterUnload(
     PAGED_CODE();
 
     /* Unregister callbacks before tearing down comms (reverse init order) */
+    SentinelFileHashStop();
     SentinelKapcInjectStop();
     SentinelRegistryCallbackStop();
     SentinelImageLoadCallbackStop();
@@ -268,13 +270,22 @@ DriverEntry(
         goto cleanup_registry_cb;
     }
 
-    /* ── Step 11: Start filtering ──────────────────────────────────────── */
+    /* ── Step 11: Initialize file hash subsystem ─────────────────────── */
+
+    status = SentinelFileHashInit();
+    if (!NT_SUCCESS(status)) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "SentinelPOC: SentinelFileHashInit failed 0x%08X\n", status));
+        goto cleanup_kapc;
+    }
+
+    /* ── Step 12: Start filtering ──────────────────────────────────────── */
 
     status = FltStartFiltering(g_FilterHandle);
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
             "SentinelPOC: FltStartFiltering failed 0x%08X\n", status));
-        goto cleanup_kapc;
+        goto cleanup_hash;
     }
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
@@ -283,6 +294,9 @@ DriverEntry(
     return STATUS_SUCCESS;
 
     /* ── Cleanup on failure ────────────────────────────────────────────── */
+
+cleanup_hash:
+    SentinelFileHashStop();
 
 cleanup_kapc:
     SentinelKapcInjectStop();

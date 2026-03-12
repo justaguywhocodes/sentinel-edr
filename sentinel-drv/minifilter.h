@@ -13,6 +13,22 @@
 #define SENTINEL_MINIFILTER_H
 
 #include <fltKernel.h>
+#include "telemetry.h"
+
+/* ── Shared helpers (used by file_hash.c) ────────────────────────────────── */
+
+void
+SentinelMinifilterFillProcessCtx(
+    _Out_ SENTINEL_PROCESS_CTX *Ctx,
+    _In_  PFLT_CALLBACK_DATA    Data
+);
+
+void
+SentinelMinifilterEmitFileEvent(
+    _In_ PFLT_CALLBACK_DATA    Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_ SENTINEL_FILE_OP      Operation
+);
 
 /* ── IRP_MJ_CREATE ──────────────────────────────────────────────────────── */
 

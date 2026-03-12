@@ -21,6 +21,7 @@
 #include <ntstrsafe.h>
 
 #include "minifilter.h"
+#include "file_hash.h"
 #include "constants.h"
 #include "telemetry.h"
 #include "comms.h"
@@ -67,15 +68,17 @@ SentinelMinifilterShouldSkipPreOp(
     _In_ PFLT_CALLBACK_DATA Data
 );
 
-static void
+/* Non-static — also called from file_hash.c */
+void
 SentinelMinifilterFillProcessCtx(
     _Out_ SENTINEL_PROCESS_CTX *Ctx,
     _In_  PFLT_CALLBACK_DATA    Data
 );
 
-static void
+void
 SentinelMinifilterEmitFileEvent(
     _In_ PFLT_CALLBACK_DATA    Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _In_ SENTINEL_FILE_OP      Operation
 );
 
@@ -276,7 +279,8 @@ SentinelPostCreate(
     _In_     FLT_POST_OPERATION_FLAGS    Flags
 )
 {
-    UNREFERENCED_PARAMETER(FltObjects);
+    ULONG_PTR info;
+
     UNREFERENCED_PARAMETER(CompletionContext);
 
     /* Don't process during volume teardown */
@@ -294,17 +298,25 @@ SentinelPostCreate(
      * FILE_OPENED = existing file opened, FILE_CREATED = new file created,
      * FILE_OVERWRITTEN = existing file overwritten.
      */
-    {
-        ULONG_PTR info = Data->IoStatus.Information;
-        if (info != FILE_CREATED &&
-            info != FILE_OPENED &&
-            info != FILE_OVERWRITTEN &&
-            info != FILE_SUPERSEDED) {
-            return FLT_POSTOP_FINISHED_PROCESSING;
-        }
+    info = Data->IoStatus.Information;
+    if (info != FILE_CREATED &&
+        info != FILE_OPENED &&
+        info != FILE_OVERWRITTEN &&
+        info != FILE_SUPERSEDED) {
+        return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
-    SentinelMinifilterEmitFileEvent(Data, SentinelFileOpCreate);
+    /*
+     * Content-modifying creates get async hash + event.
+     * Read-only opens (FILE_OPENED) get synchronous event without hash.
+     */
+    if (info == FILE_CREATED ||
+        info == FILE_OVERWRITTEN ||
+        info == FILE_SUPERSEDED) {
+        SentinelFileHashQueueWorkItem(Data, FltObjects, SentinelFileOpCreate);
+    } else {
+        SentinelMinifilterEmitFileEvent(Data, FltObjects, SentinelFileOpCreate);
+    }
 
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
@@ -355,7 +367,7 @@ SentinelPostWrite(
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
-    SentinelMinifilterEmitFileEvent(Data, SentinelFileOpWrite);
+    SentinelMinifilterEmitFileEvent(Data, FltObjects, SentinelFileOpWrite);
 
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
@@ -449,7 +461,7 @@ SentinelPostSetInfo(
         op = SentinelFileOpSetInfo;
     }
 
-    SentinelMinifilterEmitFileEvent(Data, op);
+    SentinelMinifilterEmitFileEvent(Data, FltObjects, op);
 
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
@@ -464,9 +476,10 @@ SentinelPostSetInfo(
  * a crash in one (e.g., name query or token extraction) degrades
  * gracefully — the event is still sent with whatever fields succeeded.
  */
-static void
+void
 SentinelMinifilterEmitFileEvent(
     _In_ PFLT_CALLBACK_DATA    Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _In_ SENTINEL_FILE_OP      Operation
 )
 {
@@ -555,6 +568,24 @@ SentinelMinifilterEmitFileEvent(
             GetExceptionCode()));
     }
 
+    /* File size */
+    __try {
+        FILE_STANDARD_INFORMATION stdInfo = { 0 };
+        status = FltQueryInformationFile(
+            FltObjects->Instance,
+            Data->Iopb->TargetFileObject,
+            &stdInfo,
+            sizeof(stdInfo),
+            FileStandardInformation,
+            NULL
+        );
+        if (NT_SUCCESS(status)) {
+            event->Payload.File.FileSize = stdInfo.EndOfFile;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        /* Non-fatal — size stays 0 */
+    }
+
     /* Rename: extract new file path */
     if (Operation == SentinelFileOpRename) {
         __try {
@@ -635,7 +666,7 @@ cleanup:
  * Fill SENTINEL_PROCESS_CTX from the I/O callback data.
  * Similar to SentinelFillProcessContext in callbacks_process.c.
  */
-static void
+void
 SentinelMinifilterFillProcessCtx(
     _Out_ SENTINEL_PROCESS_CTX *Ctx,
     _In_  PFLT_CALLBACK_DATA    Data

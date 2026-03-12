@@ -7,6 +7,7 @@ add_executable(sentinel-agent
     pipeline.cpp
     event_processor.cpp
     process_table.cpp
+    network_table.cpp
     json_writer.cpp
     rules/rule_engine.cpp
     rules/rule_parser.cpp

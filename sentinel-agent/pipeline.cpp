@@ -18,6 +18,7 @@
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <chrono>
 
 #include "pipeline.h"
 #include "event_processor.h"
@@ -333,14 +334,30 @@ ProcessorThread()
 {
     AgentLog("SentinelAgent: Processing thread started\n");
 
+    auto lastTableDump = std::chrono::steady_clock::now();
+    constexpr auto TABLE_DUMP_INTERVAL = std::chrono::seconds(30);
+
     while (!g_Shutdown.load()) {
         SENTINEL_EVENT event = {};
 
         if (!g_EventQueue.Pop(event, 1000)) {
-            continue;   /* Timeout or shutdown */
+            /* Timeout — check if it's time for a periodic connection table dump */
+            auto now = std::chrono::steady_clock::now();
+            if (now - lastTableDump >= TABLE_DUMP_INTERVAL) {
+                g_EventProcessor.GetNetworkTable().PrintSummary();
+                lastTableDump = now;
+            }
+            continue;
         }
 
         g_EventProcessor.Process(event);
+
+        /* Periodic connection table dump (also check after processing events) */
+        auto now = std::chrono::steady_clock::now();
+        if (now - lastTableDump >= TABLE_DUMP_INTERVAL) {
+            g_EventProcessor.GetNetworkTable().PrintSummary();
+            lastTableDump = now;
+        }
     }
 
     /* Drain remaining events */

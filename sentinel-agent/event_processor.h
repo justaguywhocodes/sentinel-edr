@@ -10,6 +10,7 @@
  * P4-T3: Single-Event Rule Engine.
  * P4-T4: Sequence Rule Engine.
  * P4-T5: Threshold Rule Engine.
+ * P6-T3: Connection Table.
  */
 
 #ifndef SENTINEL_EVENT_PROCESSOR_H
@@ -18,6 +19,7 @@
 #include <windows.h>
 #include "telemetry.h"
 #include "process_table.h"
+#include "network_table.h"
 #include "json_writer.h"
 #include "rules/rule_engine.h"
 #include "rules/sequence_engine.h"
@@ -50,8 +52,12 @@ public:
     /* Total events processed since Init. */
     ULONGLONG EventsProcessed() const { return m_eventsProcessed; }
 
+    /* Access the connection table (for periodic summary, CLI queries). */
+    NetworkTable& GetNetworkTable() { return m_networkTable; }
+
 private:
     ProcessTable      m_processTable;
+    NetworkTable      m_networkTable;
     RuleEngine        m_ruleEngine;
     SequenceEngine    m_sequenceEngine;
     ThresholdEngine   m_thresholdEngine;

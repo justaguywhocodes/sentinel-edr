@@ -9,6 +9,7 @@ add_library(sentinel-hook SHARED
     hooks_thread.c
     hooks_section.c
     hooks_process.c
+    hooks_pipe.c
     pipe_client.c
 )
 

@@ -15,7 +15,12 @@
 #include <fltKernel.h>
 #include "telemetry.h"
 
-/* ── Shared helpers (used by file_hash.c) ────────────────────────────────── */
+/* ── Shared helpers (used by file_hash.c, minifilter_pipes.c) ─────────────── */
+
+BOOLEAN
+SentinelMinifilterShouldSkipPreOp(
+    _In_ PFLT_CALLBACK_DATA Data
+);
 
 void
 SentinelMinifilterFillProcessCtx(

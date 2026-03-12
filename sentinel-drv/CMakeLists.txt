@@ -14,6 +14,7 @@ wdk_add_driver(sentinel-drv
     callbacks_registry.c
     kapc_inject.c
     minifilter.c
+    minifilter_pipes.c
     file_hash.c
 )
 

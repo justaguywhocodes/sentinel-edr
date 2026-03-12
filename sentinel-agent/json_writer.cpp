@@ -18,7 +18,7 @@ static const char* g_SourceNames[] = {
     "DriverProcess", "DriverThread", "DriverObject",
     "DriverImageLoad", "DriverRegistry", "DriverMinifilter",
     "DriverNetwork", "HookDll", "Etw", "Amsi",
-    "Scanner", "RuleEngine", "SelfProtect",
+    "Scanner", "RuleEngine", "SelfProtect", "DriverPipe",
 };
 
 static const char* g_SeverityNames[] = {
@@ -38,6 +38,7 @@ static const char* g_HookFuncNames[] = {
     "NtSuspendThread",
     "NtResumeThread",
     "NtCreateSection",
+    "NtCreateNamedPipeFile",
 };
 
 static const char* g_RegOpNames[] = {
@@ -417,6 +418,8 @@ JsonWriter::PayloadToJson(const SENTINEL_EVENT& evt)
         return RegistryPayloadToJson(evt.Payload.Registry);
     case SentinelSourceDriverMinifilter:
         return FilePayloadToJson(evt.Payload.File);
+    case SentinelSourceDriverPipe:
+        return PipePayloadToJson(evt.Payload.Pipe);
     case SentinelSourceAmsi:
         return AmsiPayloadToJson(evt.Payload.Amsi);
     case SentinelSourceRuleEngine:
@@ -437,6 +440,33 @@ JsonWriter::HookPayloadToJson(const SENTINEL_HOOK_EVENT& hook)
     json += "{\"function\":\"";
     json += HookFunctionName(hook.Function);
     json += "\"";
+
+    /*
+     * NtCreateNamedPipeFile repurposes fields:
+     *   CallingModule → pipe name
+     *   Protection    → isSuspicious (0 or 1)
+     *   AllocationType → DesiredAccess
+     */
+    if (hook.Function == SentinelHookNtCreateNamedPipeFile) {
+        json += ",\"pipeName\":\"";
+        json += EscapeJson(WcharToUtf8(hook.CallingModule));
+        json += "\"";
+
+        if (hook.Protection) {
+            json += ",\"isSuspicious\":true";
+        }
+
+        json += ",\"desiredAccess\":\"";
+        json += DwordToHex(hook.AllocationType);
+        json += "\"";
+
+        json += ",\"returnStatus\":\"";
+        json += DwordToHex(hook.ReturnStatus);
+        json += "\"";
+
+        json += '}';
+        return json;
+    }
 
     json += ",\"targetPid\":";
     _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu", hook.TargetProcessId);
@@ -695,6 +725,32 @@ JsonWriter::FilePayloadToJson(const SENTINEL_FILE_EVENT& file)
 
     if (file.HashSkipped) {
         json += ",\"hashSkipped\":true";
+    }
+
+    json += '}';
+    return json;
+}
+
+std::string
+JsonWriter::PipePayloadToJson(const SENTINEL_PIPE_EVENT& pipe)
+{
+    std::string json;
+    char numBuf[32];
+
+    json += "{\"pipeName\":\"";
+    json += EscapeJson(WcharToUtf8(pipe.PipeName));
+    json += "\"";
+
+    json += ",\"creatingProcessId\":";
+    _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu", pipe.CreatingProcessId);
+    json += numBuf;
+
+    json += ",\"accessMode\":\"";
+    json += DwordToHex(pipe.AccessMode);
+    json += "\"";
+
+    if (pipe.IsSuspicious) {
+        json += ",\"isSuspicious\":true";
     }
 
     json += '}';

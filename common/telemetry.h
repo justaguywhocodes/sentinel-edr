@@ -78,6 +78,7 @@ typedef enum _SENTINEL_EVENT_SOURCE {
     SentinelSourceScanner           = 10,   /* Ch. 9: file/memory scanner */
     SentinelSourceRuleEngine        = 11,   /* Ch. 1: detection rule alert */
     SentinelSourceSelfProtect       = 12,   /* Ch. 2-12: tamper detection */
+    SentinelSourceDriverPipe        = 13,   /* Ch. 6: named pipe monitoring */
     SentinelSourceMax
 } SENTINEL_EVENT_SOURCE;
 
@@ -260,6 +261,7 @@ typedef enum _SENTINEL_HOOK_FUNCTION {
     SentinelHookNtSuspendThread             = 9,
     SentinelHookNtResumeThread              = 10,
     SentinelHookNtCreateSection             = 11,
+    SentinelHookNtCreateNamedPipeFile       = 12,
     SentinelHookMax
 } SENTINEL_HOOK_FUNCTION;
 

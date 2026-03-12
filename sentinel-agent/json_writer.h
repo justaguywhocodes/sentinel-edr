@@ -63,6 +63,7 @@ private:
     std::string ImageLoadPayloadToJson(const SENTINEL_IMAGELOAD_EVENT& img);
     std::string RegistryPayloadToJson(const SENTINEL_REGISTRY_EVENT& reg);
     std::string FilePayloadToJson(const SENTINEL_FILE_EVENT& file);
+    std::string PipePayloadToJson(const SENTINEL_PIPE_EVENT& pipe);
     std::string NetworkPayloadToJson(const SENTINEL_NETWORK_EVENT& net);
     std::string AmsiPayloadToJson(const SENTINEL_AMSI_EVENT& amsi);
     std::string AlertPayloadToJson(const SENTINEL_ALERT_EVENT& alert);

@@ -83,17 +83,27 @@ EventProcessor::PrintSummary(const SENTINEL_EVENT& evt)
 {
     if (evt.Source == SentinelSourceHookDll) {
         const auto& hook = evt.Payload.Hook;
-        std::printf("[%llu] source=%s func=%s pid=%lu targetPid=%lu "
-                    "addr=0x%llx size=0x%llx prot=0x%lx status=0x%08lx\n",
-                    m_eventsProcessed,
-                    SourceName(evt.Source),
-                    HookFunctionName(hook.Function),
-                    evt.ProcessCtx.ProcessId,
-                    hook.TargetProcessId,
-                    (unsigned long long)hook.BaseAddress,
-                    (unsigned long long)hook.RegionSize,
-                    hook.Protection,
-                    hook.ReturnStatus);
+        if (hook.Function == SentinelHookNtCreateNamedPipeFile) {
+            /* Pipe hook: CallingModule=pipeName, Protection=isSuspicious */
+            std::printf("[%llu] source=%s PIPE_CREATE pid=%lu pipe=%S%s\n",
+                        m_eventsProcessed,
+                        SourceName(evt.Source),
+                        evt.ProcessCtx.ProcessId,
+                        hook.CallingModule,
+                        hook.Protection ? " [SUSPICIOUS]" : "");
+        } else {
+            std::printf("[%llu] source=%s func=%s pid=%lu targetPid=%lu "
+                        "addr=0x%llx size=0x%llx prot=0x%lx status=0x%08lx\n",
+                        m_eventsProcessed,
+                        SourceName(evt.Source),
+                        HookFunctionName(hook.Function),
+                        evt.ProcessCtx.ProcessId,
+                        hook.TargetProcessId,
+                        (unsigned long long)hook.BaseAddress,
+                        (unsigned long long)hook.RegionSize,
+                        hook.Protection,
+                        hook.ReturnStatus);
+        }
     } else if (evt.Source == SentinelSourceDriverMinifilter) {
         const auto& file = evt.Payload.File;
         static const char* fileOpNames[] = {
@@ -110,6 +120,14 @@ EventProcessor::PrintSummary(const SENTINEL_EVENT& evt)
                     file.FileSize.QuadPart,
                     file.Sha256Hex[0] ? file.Sha256Hex : "(none)",
                     file.HashSkipped ? " [skipped]" : "");
+    } else if (evt.Source == SentinelSourceDriverPipe) {
+        const auto& pipe = evt.Payload.Pipe;
+        std::printf("[%llu] source=%s PIPE_CREATE pid=%lu pipe=%S%s\n",
+                    m_eventsProcessed,
+                    SourceName(evt.Source),
+                    pipe.CreatingProcessId,
+                    pipe.PipeName,
+                    pipe.IsSuspicious ? " [SUSPICIOUS]" : "");
     } else if (evt.Source == SentinelSourceDriverProcess) {
         const auto& proc = evt.Payload.Process;
         std::printf("[%llu] source=%s %s pid=%lu ppid=%lu\n",

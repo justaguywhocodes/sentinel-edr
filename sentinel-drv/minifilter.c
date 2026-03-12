@@ -21,6 +21,7 @@
 #include <ntstrsafe.h>
 
 #include "minifilter.h"
+#include "minifilter_pipes.h"
 #include "file_hash.h"
 #include "constants.h"
 #include "telemetry.h"
@@ -63,7 +64,8 @@ SentinelMinifilterIsExcluded(
     _In_ PFLT_CALLBACK_DATA Data
 );
 
-static BOOLEAN
+/* Non-static — also called from minifilter_pipes.c */
+BOOLEAN
 SentinelMinifilterShouldSkipPreOp(
     _In_ PFLT_CALLBACK_DATA Data
 );
@@ -148,8 +150,9 @@ WcsCaseContains(
 
 /*
  * Common pre-op filtering: skip fast I/O, kernel callers, paging I/O.
+ * Non-static — also used by minifilter_pipes.c.
  */
-static BOOLEAN
+BOOLEAN
 SentinelMinifilterShouldSkipPreOp(
     _In_ PFLT_CALLBACK_DATA Data
 )
@@ -304,6 +307,47 @@ SentinelPostCreate(
         info != FILE_OVERWRITTEN &&
         info != FILE_SUPERSEDED) {
         return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    /*
+     * Check if this is a named pipe creation on the NPFS volume
+     * (\Device\NamedPipe\...).  If so, emit a pipe event instead
+     * of a file event — the payloads use different union members.
+     */
+    __try {
+        PFLT_FILE_NAME_INFORMATION pipeNameInfo = NULL;
+        NTSTATUS pipeStatus;
+
+        pipeStatus = FltGetFileNameInformation(
+            Data,
+            FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+            &pipeNameInfo
+        );
+        if (!NT_SUCCESS(pipeStatus)) {
+            pipeStatus = FltGetFileNameInformation(
+                Data,
+                FLT_FILE_NAME_OPENED | FLT_FILE_NAME_QUERY_DEFAULT,
+                &pipeNameInfo
+            );
+        }
+        if (NT_SUCCESS(pipeStatus)) {
+            BOOLEAN isPipe = SentinelPipeIsNamedPipePath(&pipeNameInfo->Name);
+
+            if (isPipe) {
+                KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+                    "SentinelPOC: PostCreate detected pipe path: %wZ\n",
+                    &pipeNameInfo->Name));
+            }
+
+            FltReleaseFileNameInformation(pipeNameInfo);
+
+            if (isPipe) {
+                SentinelPipeEmitEvent(Data, FltObjects);
+                return FLT_POSTOP_FINISHED_PROCESSING;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        /* Non-fatal — fall through to file event */
     }
 
     /*

@@ -97,5 +97,6 @@ void InstallMemoryHooks(void);
 void InstallThreadHooks(void);
 void InstallSectionHooks(void);
 void InstallProcessHooks(void);
+void InstallPipeHooks(void);
 
 #endif /* SENTINEL_HOOKS_COMMON_H */

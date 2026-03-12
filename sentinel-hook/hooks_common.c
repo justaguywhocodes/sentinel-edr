@@ -102,6 +102,7 @@ static const char *g_HookFunctionNames[] = {
     "NtSuspendThread",              /* 9 */
     "NtResumeThread",               /* 10 */
     "NtCreateSection",              /* 11 */
+    "NtCreateNamedPipeFile",        /* 12 */
 };
 
 const char *

@@ -27,6 +27,7 @@
 #include "callbacks_registry.h"
 #include "kapc_inject.h"
 #include "minifilter.h"
+#include "minifilter_pipes.h"
 #include "file_hash.h"
 
 /* ── Forward declarations ────────────────────────────────────────────────── */
@@ -77,6 +78,7 @@ const FLT_OPERATION_REGISTRATION g_OperationCallbacks[] = {
     { IRP_MJ_CREATE,          0, SentinelPreCreate,  SentinelPostCreate },
     { IRP_MJ_WRITE,           0, SentinelPreWrite,   SentinelPostWrite },
     { IRP_MJ_SET_INFORMATION, 0, SentinelPreSetInfo, SentinelPostSetInfo },
+    { IRP_MJ_CREATE_NAMED_PIPE, 0, SentinelPreCreateNamedPipe, SentinelPostCreateNamedPipe },
     { IRP_MJ_OPERATION_END }
 };
 
@@ -135,11 +137,20 @@ SentinelInstanceSetup(
 {
     UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(Flags);
-    UNREFERENCED_PARAMETER(VolumeDeviceType);
-    UNREFERENCED_PARAMETER(VolumeFilesystemType);
     PAGED_CODE();
 
-    /* Accept all volumes — refined in Phase 5 */
+    /*
+     * Log every volume attachment for diagnostics.
+     * FLT_FSTYPE_NPFS = 8 — we need to confirm the minifilter
+     * attaches to the Named Pipe File System.
+     */
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+        "SentinelPOC: InstanceSetup devType=0x%X fsType=%d%s\n",
+        (ULONG)VolumeDeviceType,
+        (int)VolumeFilesystemType,
+        (VolumeFilesystemType == FLT_FSTYPE_NPFS) ? " [NPFS!]" : ""));
+
+    /* Accept all volumes including NPFS */
     return STATUS_SUCCESS;
 }
 

@@ -32,6 +32,9 @@ InstallAllHooks(void)
     /* P3-T3: Process hooks */
     InstallProcessHooks();      /* NtOpenProcess */
 
+    /* P5-T3: Named pipe monitoring */
+    InstallPipeHooks();         /* NtCreateNamedPipeFile */
+
     /*
      * One-time init log. Uses _snprintf_s (CRT) + WriteFile (kernel32)
      * instead of wsprintfA (user32) + OutputDebugStringA (DBWIN mutex).

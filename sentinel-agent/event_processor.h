@@ -26,6 +26,7 @@
 #include "rules/threshold_engine.h"
 #include "scanner/yara_scanner.h"
 #include "scanner/onaccess_scanner.h"
+#include "scanner/memory_scanner.h"
 
 class EventProcessor {
 public:
@@ -69,6 +70,7 @@ private:
     JsonWriter        m_jsonWriter;
     YaraScanner       m_yaraScanner;
     OnAccessScanner   m_onAccessScanner;
+    MemoryScanner     m_memoryScanner;
     ULONGLONG       m_eventsProcessed = 0;
 
     void PrintSummary(const SENTINEL_EVENT& evt);

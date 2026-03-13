@@ -236,6 +236,7 @@ static const WCHAR* SENTINEL_REG_EXCLUSIONS[] = {
 /* ── Scanner limits ──────────────────────────────────────────────────────── */
 
 #define SENTINEL_SCAN_MAX_FILE_SIZE         (50 * 1024 * 1024)  /* 50 MB */
+#define SENTINEL_SCAN_MAX_REGION_SIZE       (10 * 1024 * 1024)  /* 10 MB per memory region */
 #define SENTINEL_SCAN_CACHE_TTL_SEC         300                 /* 5 minutes */
 
 /* ── Log rotation ────────────────────────────────────────────────────────── */

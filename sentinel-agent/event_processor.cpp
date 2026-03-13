@@ -10,6 +10,7 @@
 
 #include "event_processor.h"
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 /* ── Init / Shutdown ─────────────────────────────────────────────────────── */
@@ -32,12 +33,16 @@ EventProcessor::Init(const char* logPath)
     /* Initialize on-access scanner (P8-T2) */
     m_onAccessScanner.Init(&m_yaraScanner);
 
+    /* Initialize memory scanner (P8-T3) */
+    m_memoryScanner.Init(&m_yaraScanner);
+
     return m_jsonWriter.Open(logPath);
 }
 
 void
 EventProcessor::Shutdown()
 {
+    m_memoryScanner.Shutdown();
     m_onAccessScanner.Shutdown();
     m_yaraScanner.Shutdown();
     m_jsonWriter.Close();
@@ -97,6 +102,24 @@ EventProcessor::Process(const SENTINEL_EVENT& evt)
                     alert.Payload.Alert.RuleName,
                     SourceName(alert.Payload.Alert.TriggerSource),
                     alert.ProcessCtx.ProcessId);
+    }
+
+    /* 9. Trigger memory scan on shellcode sequence alerts (P8-T3).
+     *    When the sequence rule detects alloc(RW) → protect(RX) → create_thread,
+     *    scan the offending process for unbacked executable memory regions. */
+    for (const auto& alert : alerts) {
+        if (alert.Source == SentinelSourceRuleEngine &&
+            std::strstr(alert.Payload.Alert.RuleName, "Shellcode") != nullptr) {
+            SENTINEL_EVENT memAlert = {};
+            if (m_memoryScanner.ScanProcess(
+                    alert.ProcessCtx.ProcessId, memAlert)) {
+                m_eventsProcessed++;
+                std::wstring memParent =
+                    m_processTable.GetParentImagePath(memAlert);
+                m_jsonWriter.WriteEvent(memAlert, memParent);
+                PrintSummary(memAlert);
+            }
+        }
     }
 }
 

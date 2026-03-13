@@ -24,6 +24,7 @@ add_executable(sentinel-agent
     amsi/amsi_register.cpp
     scanner/yara_scanner.cpp
     scanner/onaccess_scanner.cpp
+    scanner/memory_scanner.cpp
 )
 
 target_include_directories(sentinel-agent PRIVATE

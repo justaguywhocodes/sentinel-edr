@@ -11,12 +11,16 @@
  * P4-T4: Sequence Rule Engine.
  * P4-T5: Threshold Rule Engine.
  * P6-T3: Connection Table.
+ * P9-T1: CLI command support (alert history, rule reload, on-demand scan).
  */
 
 #ifndef SENTINEL_EVENT_PROCESSOR_H
 #define SENTINEL_EVENT_PROCESSOR_H
 
 #include <windows.h>
+#include <deque>
+#include <mutex>
+#include <string>
 #include "telemetry.h"
 #include "process_table.h"
 #include "network_table.h"
@@ -27,6 +31,15 @@
 #include "scanner/yara_scanner.h"
 #include "scanner/onaccess_scanner.h"
 #include "scanner/memory_scanner.h"
+
+/* ── Rule count summary (returned by GetRuleCounts) ──────────────────────── */
+
+struct RuleCountSummary {
+    size_t singleEvent;
+    size_t sequence;
+    size_t threshold;
+    int    yara;
+};
 
 class EventProcessor {
 public:
@@ -61,6 +74,33 @@ public:
     /* Access the connection table (for periodic summary, CLI queries). */
     NetworkTable& GetNetworkTable() { return m_networkTable; }
 
+    /* ── P9-T1: CLI command support ─────────────────────────────────────── */
+
+    /*
+     * Hot-reload all detection rules (single-event, sequence, threshold).
+     * Returns true if all three engines reloaded successfully.
+     */
+    bool ReloadRules();
+
+    /* Get counts from all rule engines. */
+    RuleCountSummary GetRuleCounts() const;
+
+    /* Whether the YARA scanner is initialized and ready. */
+    bool IsYaraReady() const { return m_yaraScanner.IsReady(); }
+
+    /*
+     * On-demand file scan via YARA.
+     * Returns true if scan completed; populates result.
+     */
+    bool ScanFileOnDemand(const wchar_t* path,
+                          SENTINEL_SCANNER_EVENT& result);
+
+    /*
+     * Get recent alerts (thread-safe copy).
+     * Returns up to the last ALERT_HISTORY_MAX alerts.
+     */
+    std::deque<SENTINEL_EVENT> GetAlertHistory();
+
 private:
     ProcessTable      m_processTable;
     NetworkTable      m_networkTable;
@@ -71,9 +111,15 @@ private:
     YaraScanner       m_yaraScanner;
     OnAccessScanner   m_onAccessScanner;
     MemoryScanner     m_memoryScanner;
-    ULONGLONG       m_eventsProcessed = 0;
+    ULONGLONG         m_eventsProcessed = 0;
+
+    /* Alert ring buffer for CLI `alerts` command (P9-T1) */
+    static constexpr size_t ALERT_HISTORY_MAX = 100;
+    std::deque<SENTINEL_EVENT> m_alertHistory;
+    std::mutex                 m_alertMutex;
 
     void PrintSummary(const SENTINEL_EVENT& evt);
+    void RecordAlert(const SENTINEL_EVENT& alert);
 };
 
 #endif /* SENTINEL_EVENT_PROCESSOR_H */

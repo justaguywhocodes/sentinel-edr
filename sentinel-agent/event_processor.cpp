@@ -91,7 +91,7 @@ EventProcessor::Process(const SENTINEL_EVENT& evt)
     /* 7. Print summary to stdout for console mode */
     PrintSummary(evt);
 
-    /* 8. Process alert events (write to log + print) */
+    /* 8. Process alert events (write to log + print + history) */
     for (const auto& alert : alerts) {
         m_eventsProcessed++;
         std::wstring alertParent = m_processTable.GetParentImagePath(alert);
@@ -102,6 +102,8 @@ EventProcessor::Process(const SENTINEL_EVENT& evt)
                     alert.Payload.Alert.RuleName,
                     SourceName(alert.Payload.Alert.TriggerSource),
                     alert.ProcessCtx.ProcessId);
+
+        RecordAlert(alert);
     }
 
     /* 9. Trigger memory scan on shellcode sequence alerts (P8-T3).
@@ -284,4 +286,58 @@ EventProcessor::PrintSummary(const SENTINEL_EVENT& evt)
                     SourceName(evt.Source),
                     evt.ProcessCtx.ProcessId);
     }
+}
+
+/* ── P9-T1: CLI command support ─────────────────────────────────────────── */
+
+void
+EventProcessor::RecordAlert(const SENTINEL_EVENT& alert)
+{
+    std::lock_guard<std::mutex> lock(m_alertMutex);
+    m_alertHistory.push_back(alert);
+    while (m_alertHistory.size() > ALERT_HISTORY_MAX) {
+        m_alertHistory.pop_front();
+    }
+}
+
+std::deque<SENTINEL_EVENT>
+EventProcessor::GetAlertHistory()
+{
+    std::lock_guard<std::mutex> lock(m_alertMutex);
+    return m_alertHistory;     /* Return a copy (thread-safe) */
+}
+
+RuleCountSummary
+EventProcessor::GetRuleCounts() const
+{
+    return {
+        m_ruleEngine.RuleCount(),
+        m_sequenceEngine.RuleCount(),
+        m_thresholdEngine.RuleCount(),
+        m_yaraScanner.RuleCount()
+    };
+}
+
+bool
+EventProcessor::ReloadRules()
+{
+    bool ok = true;
+
+    m_ruleEngine.Init("C:\\SentinelPOC\\rules");
+    m_sequenceEngine.Init("C:\\SentinelPOC\\rules");
+    m_thresholdEngine.Init("C:\\SentinelPOC\\rules");
+
+    std::printf("SentinelAgent: Rules reloaded — single=%zu seq=%zu thr=%zu\n",
+                m_ruleEngine.RuleCount(),
+                m_sequenceEngine.RuleCount(),
+                m_thresholdEngine.RuleCount());
+
+    return ok;
+}
+
+bool
+EventProcessor::ScanFileOnDemand(const wchar_t* path,
+                                 SENTINEL_SCANNER_EVENT& result)
+{
+    return m_yaraScanner.ScanFile(path, SentinelScanOnDemand, result);
 }

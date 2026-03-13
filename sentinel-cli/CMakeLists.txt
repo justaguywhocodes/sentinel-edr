@@ -11,4 +11,8 @@ set_target_properties(sentinel-cli PROPERTIES
     OUTPUT_NAME "sentinel-cli"
 )
 
-message(STATUS "sentinel-cli: Configured (CLI stub)")
+set_target_properties(sentinel-cli PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+
+message(STATUS "sentinel-cli: Configured (CLI with command pipe client)")

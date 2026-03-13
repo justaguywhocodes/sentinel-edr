@@ -25,6 +25,7 @@
 
 #include "pipeline.h"
 #include "event_processor.h"
+#include "cmd_handler.h"
 #include "etw/etw_consumer.h"
 #include "amsi/amsi_register.h"
 #include "ipc.h"
@@ -99,6 +100,9 @@ static std::mutex           g_ClientPipesMutex;
 
 /* Event processor */
 static EventProcessor       g_EventProcessor;
+
+/* Command handler (P9-T1) */
+static CommandHandler       g_CommandHandler;
 
 /* ── Helper: Log a status message to stdout ──────────────────────────────── */
 
@@ -445,6 +449,12 @@ PipelineStart()
     g_PortReceiverThread = std::thread(DriverPortReceiverThread);
     g_PipeListenerThread = std::thread(PipeListenerThread);
     g_ProcessorThread    = std::thread(ProcessorThread);
+
+    /* Start command handler (P9-T1: CLI commands) */
+    g_CommandHandler.Start(&g_EventProcessor, []() -> bool {
+        std::lock_guard<std::mutex> lock(g_DriverPortMutex);
+        return g_DriverPort != INVALID_HANDLE_VALUE;
+    });
 }
 
 void
@@ -461,6 +471,9 @@ PipelineStop()
 
     /* Unregister AMSI provider (before ETW stop so cleanup is clean) */
     AmsiProviderUnregister();
+
+    /* Stop command handler (P9-T1) */
+    g_CommandHandler.Stop();
 
     /* Stop ETW consumer first (unblocks ProcessTrace, joins its thread) */
     EtwConsumerStop();

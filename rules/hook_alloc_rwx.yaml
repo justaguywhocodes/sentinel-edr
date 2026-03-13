@@ -1,6 +1,11 @@
-# Detection: Suspicious RWX memory allocation
+# Detection: Suspicious RWX memory allocation (remote)
 # ATT&CK: T1055 - Process Injection
 # Detects NtAllocateVirtualMemory with PAGE_EXECUTE_READWRITE (0x40)
+# targeting a *different* process (targetPid > 0).
+#
+# Self-allocations (targetPid == 0) are routine for .NET JIT, browsers,
+# and other legitimate runtimes, so we exclude them to avoid false
+# positives.
 
 name: Suspicious RWX allocation
 source: HookDll
@@ -13,3 +18,6 @@ conditions:
   - field: payload.protection
     op: equals
     value: "0x40"
+  - field: payload.targetPid
+    op: greater_than
+    value: "0"

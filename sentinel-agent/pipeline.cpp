@@ -19,6 +19,7 @@
 #include <cstring>
 #include <thread>
 #include <vector>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 
@@ -91,6 +92,10 @@ static std::thread          g_PipeListenerThread;
 static std::thread          g_ProcessorThread;
 static std::vector<std::thread> g_ClientThreads;
 static std::mutex           g_ClientThreadsMutex;
+
+/* Active client pipe handles — tracked so PipelineStop() can CancelIoEx */
+static std::vector<HANDLE>  g_ClientPipes;
+static std::mutex           g_ClientPipesMutex;
 
 /* Event processor */
 static EventProcessor       g_EventProcessor;
@@ -210,6 +215,12 @@ PipeClientHandler(HANDLE hPipe, DWORD clientPid)
 
     AgentLog("SentinelAgent: Pipe client connected (PID %lu)\n", clientPid);
 
+    /* Register handle so PipelineStop() can CancelIoEx to unblock ReadFile */
+    {
+        std::lock_guard<std::mutex> lock(g_ClientPipesMutex);
+        g_ClientPipes.push_back(hPipe);
+    }
+
     /* Read and process events until disconnect */
     while (!g_Shutdown.load()) {
         DWORD   bytesRead = 0;
@@ -246,6 +257,14 @@ PipeClientHandler(HANDLE hPipe, DWORD clientPid)
         if (status == SentinelSerializeOk) {
             g_EventQueue.Push(event);
         }
+    }
+
+    /* Unregister handle before closing */
+    {
+        std::lock_guard<std::mutex> lock(g_ClientPipesMutex);
+        g_ClientPipes.erase(
+            std::remove(g_ClientPipes.begin(), g_ClientPipes.end(), hPipe),
+            g_ClientPipes.end());
     }
 
     DisconnectNamedPipe(hPipe);
@@ -382,13 +401,12 @@ ProcessorThread()
         }
     }
 
-    /* Drain remaining events */
-    {
-        SENTINEL_EVENT event = {};
-        while (g_EventQueue.Pop(event, 0)) {
-            g_EventProcessor.Process(event);
-        }
-    }
+    /*
+     * Discard remaining queued events on shutdown.
+     * Processing the full backlog (thousands of hook/minifilter events)
+     * would block the shutdown for minutes.  All events up to this point
+     * have already been written to the JSON log.
+     */
 
     AgentLog("SentinelAgent: Processing thread stopped (%llu events)\n",
              g_EventProcessor.EventsProcessed());
@@ -446,6 +464,17 @@ PipelineStop()
 
     /* Stop ETW consumer first (unblocks ProcessTrace, joins its thread) */
     EtwConsumerStop();
+
+    /*
+     * Cancel blocking ReadFile on active pipe client handler threads.
+     * Each handler sits in synchronous ReadFile — CancelIoEx unblocks it.
+     */
+    {
+        std::lock_guard<std::mutex> lock(g_ClientPipesMutex);
+        for (HANDLE h : g_ClientPipes) {
+            CancelIoEx(h, nullptr);
+        }
+    }
 
     /*
      * Cancel blocking I/O on the pipe listener thread.

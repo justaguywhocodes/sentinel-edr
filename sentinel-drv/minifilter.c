@@ -537,6 +537,17 @@ SentinelMinifilterEmitFileEvent(
     }
 
     /*
+     * IRQL guard: Post-operation callbacks (especially IRP_MJ_WRITE) can
+     * run at DISPATCH_LEVEL when I/O completes asynchronously via DPC.
+     * Most APIs we call below (FltGetFileNameInformation, FltQueryInformationFile,
+     * SeLocateProcessImageName, SeQueryInformationToken) require <= APC_LEVEL.
+     * Bail out rather than risk a BSOD.
+     */
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        return;
+    }
+
+    /*
      * SENTINEL_EVENT is ~22 KB — too large for kernel stack.
      * Pool-allocate to avoid stack overflow BSOD.
      */

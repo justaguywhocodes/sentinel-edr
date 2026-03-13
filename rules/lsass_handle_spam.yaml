@@ -10,8 +10,10 @@ source: HookDll
 severity: medium
 action: LOG
 
-# Fire when >= 5 matching events occur within 10 seconds
-threshold: 5
+# Fire when >= 500 matching events occur within 10 seconds.
+# The original value of 5 caused false positives — normal .NET and
+# browser processes easily exceed that during routine operation.
+threshold: 500
 window: 10000
 
 # Count per source PID (each process tracked independently)

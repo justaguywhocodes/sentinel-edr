@@ -188,6 +188,40 @@ EventProcessor::PrintSummary(const SENTINEL_EVENT& evt)
                         etw.ProcessId,
                         etw.u.Kerberos.TargetName,
                         etw.u.Kerberos.Status);
+        } else if (etw.Provider == SentinelEtwRpc) {
+            const GUID& iface = etw.u.Rpc.InterfaceUuid;
+            std::printf("[%llu] source=%s provider=RPC eventId=%u pid=%lu "
+                        "iface={%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X} "
+                        "opnum=%lu proto=%lu\n",
+                        m_eventsProcessed,
+                        SourceName(evt.Source),
+                        etw.EventId,
+                        etw.ProcessId,
+                        iface.Data1, iface.Data2, iface.Data3,
+                        iface.Data4[0], iface.Data4[1],
+                        iface.Data4[2], iface.Data4[3],
+                        iface.Data4[4], iface.Data4[5],
+                        iface.Data4[6], iface.Data4[7],
+                        etw.u.Rpc.OpNum,
+                        etw.u.Rpc.Protocol);
+        } else if (etw.Provider == SentinelEtwKernelProc) {
+            if (etw.EventId == 1) {
+                std::printf("[%llu] source=%s provider=KernelProcess eventId=%u pid=%lu ppid=%lu image=%S\n",
+                            m_eventsProcessed,
+                            SourceName(evt.Source),
+                            etw.EventId,
+                            etw.ProcessId,
+                            etw.u.KernelProcess.ParentProcessId,
+                            etw.u.KernelProcess.ImageName);
+            } else {
+                std::printf("[%llu] source=%s provider=KernelProcess eventId=%u pid=%lu exitCode=%lu image=%S\n",
+                            m_eventsProcessed,
+                            SourceName(evt.Source),
+                            etw.EventId,
+                            etw.ProcessId,
+                            etw.u.KernelProcess.ExitCode,
+                            etw.u.KernelProcess.ImageName);
+            }
         } else {
             std::printf("[%llu] source=%s provider=%d eventId=%u pid=%lu\n",
                         m_eventsProcessed,
@@ -196,6 +230,14 @@ EventProcessor::PrintSummary(const SENTINEL_EVENT& evt)
                         etw.EventId,
                         etw.ProcessId);
         }
+    } else if (evt.Source == SentinelSourceAmsi) {
+        const auto& amsi = evt.Payload.Amsi;
+        std::printf("[%llu] source=%s appName=%S scanResult=%d contentSize=%lu\n",
+                    m_eventsProcessed,
+                    SourceName(evt.Source),
+                    amsi.AppName,
+                    amsi.ScanResult,
+                    amsi.ContentSize);
     } else if (evt.Source == SentinelSourceDriverProcess) {
         const auto& proc = evt.Payload.Process;
         std::printf("[%llu] source=%s %s pid=%lu ppid=%lu\n",

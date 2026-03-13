@@ -988,6 +988,56 @@ JsonWriter::EtwPayloadToJson(const SENTINEL_ETW_EVENT& etw)
         json += numBuf;
         break;
 
+    case SentinelEtwRpc:
+    {
+        /* Format InterfaceUuid as standard GUID string */
+        char guidBuf[64];
+        const GUID& iface = etw.u.Rpc.InterfaceUuid;
+        _snprintf_s(guidBuf, sizeof(guidBuf), _TRUNCATE,
+            "%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+            iface.Data1, iface.Data2, iface.Data3,
+            iface.Data4[0], iface.Data4[1],
+            iface.Data4[2], iface.Data4[3],
+            iface.Data4[4], iface.Data4[5],
+            iface.Data4[6], iface.Data4[7]);
+
+        json += ",\"interfaceUuid\":\"";
+        json += guidBuf;
+        json += "\"";
+
+        json += ",\"opNum\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.Rpc.OpNum);
+        json += numBuf;
+
+        json += ",\"protocol\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.Rpc.Protocol);
+        json += numBuf;
+        break;
+    }
+
+    case SentinelEtwKernelProc:
+        json += ",\"parentProcessId\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.KernelProcess.ParentProcessId);
+        json += numBuf;
+
+        json += ",\"sessionId\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.KernelProcess.SessionId);
+        json += numBuf;
+
+        json += ",\"exitCode\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.KernelProcess.ExitCode);
+        json += numBuf;
+
+        json += ",\"imageName\":\"";
+        json += EscapeJson(WcharToUtf8(etw.u.KernelProcess.ImageName));
+        json += "\"";
+        break;
+
     default:
         break;
     }

@@ -18,6 +18,9 @@ add_executable(sentinel-agent
     etw/provider_dns.cpp
     etw/provider_powershell.cpp
     etw/provider_kerberos.cpp
+    etw/provider_amsi.cpp
+    etw/provider_rpc.cpp
+    etw/provider_kernelprocess.cpp
 )
 
 target_include_directories(sentinel-agent PRIVATE

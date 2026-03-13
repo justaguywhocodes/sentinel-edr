@@ -344,6 +344,14 @@ typedef struct _SENTINEL_ETW_EVENT {
             ULONG       OpNum;
             ULONG       Protocol;
         } Rpc;
+
+        /* Kernel-Process: process create/stop (cross-validates driver callbacks) */
+        struct {
+            ULONG       ParentProcessId;
+            ULONG       SessionId;
+            ULONG       ExitCode;
+            WCHAR       ImageName[SENTINEL_MAX_PATH];
+        } KernelProcess;
     } u;
 } SENTINEL_ETW_EVENT;
 

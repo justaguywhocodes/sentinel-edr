@@ -25,6 +25,9 @@
 #include "provider_dns.h"
 #include "provider_powershell.h"
 #include "provider_kerberos.h"
+#include "provider_amsi.h"
+#include "provider_rpc.h"
+#include "provider_kernelprocess.h"
 
 #include <windows.h>
 #include <evntrace.h>
@@ -214,6 +217,66 @@ EtwConsumerInit()
         std::printf("SentinelAgent: Enabled provider: Microsoft-Windows-Security-Kerberos\n");
     }
 
+    /* ── Step 7: Enable AMSI provider ────────────────────────────── */
+
+    status = EnableTraceEx2(
+        s_SessionHandle,
+        &SENTINEL_ETW_AMSI,
+        EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+        TRACE_LEVEL_VERBOSE,        /* Level 5 — AMSI events fire at Verbose */
+        0x8000000000000001ULL,      /* MatchAnyKeyword: AMSI operational keyword */
+        0,                          /* MatchAllKeyword */
+        0,                          /* Timeout (0 = async) */
+        NULL                        /* EnableParameters */
+    );
+
+    if (status != ERROR_SUCCESS) {
+        std::printf("SentinelAgent: EnableTraceEx2 (AMSI) failed (error %lu)\n",
+            status);
+    } else {
+        std::printf("SentinelAgent: Enabled provider: Microsoft-Antimalware-Scan-Interface\n");
+    }
+
+    /* ── Step 8: Enable RPC provider ─────────────────────────────── */
+
+    status = EnableTraceEx2(
+        s_SessionHandle,
+        &SENTINEL_ETW_RPC,
+        EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+        TRACE_LEVEL_INFORMATION,    /* Level 4 — RPC call events fire here */
+        0,                          /* MatchAnyKeyword: 0 = all; parser filters by event ID */
+        0,                          /* MatchAllKeyword */
+        0,                          /* Timeout (0 = async) */
+        NULL                        /* EnableParameters */
+    );
+
+    if (status != ERROR_SUCCESS) {
+        std::printf("SentinelAgent: EnableTraceEx2 (RPC) failed (error %lu)\n",
+            status);
+    } else {
+        std::printf("SentinelAgent: Enabled provider: Microsoft-Windows-RPC\n");
+    }
+
+    /* ── Step 9: Enable Kernel-Process provider ──────────────────── */
+
+    status = EnableTraceEx2(
+        s_SessionHandle,
+        &SENTINEL_ETW_KERNEL_PROCESS,
+        EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+        TRACE_LEVEL_INFORMATION,    /* Level 4 — process events fire here */
+        0x10ULL,                    /* MatchAnyKeyword: WINEVENT_KEYWORD_PROCESS */
+        0,                          /* MatchAllKeyword */
+        0,                          /* Timeout (0 = async) */
+        NULL                        /* EnableParameters */
+    );
+
+    if (status != ERROR_SUCCESS) {
+        std::printf("SentinelAgent: EnableTraceEx2 (Kernel-Process) failed (error %lu)\n",
+            status);
+    } else {
+        std::printf("SentinelAgent: Enabled provider: Microsoft-Windows-Kernel-Process\n");
+    }
+
     s_Initialized.store(true);
     return true;
 }
@@ -348,6 +411,21 @@ EtwEventCallback(PEVENT_RECORD pEvent)
                             SENTINEL_ETW_KERBEROS)) {
 
         parsed = ParseKerberosEvent(pEvent, &sEvent);
+
+    } else if (IsEqualGUID(pEvent->EventHeader.ProviderId,
+                            SENTINEL_ETW_AMSI)) {
+
+        parsed = ParseAmsiEvent(pEvent, &sEvent);
+
+    } else if (IsEqualGUID(pEvent->EventHeader.ProviderId,
+                            SENTINEL_ETW_RPC)) {
+
+        parsed = ParseRpcEvent(pEvent, &sEvent);
+
+    } else if (IsEqualGUID(pEvent->EventHeader.ProviderId,
+                            SENTINEL_ETW_KERNEL_PROCESS)) {
+
+        parsed = ParseKernelProcessEvent(pEvent, &sEvent);
     }
 
     if (parsed) {

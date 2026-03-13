@@ -17,6 +17,40 @@
 #include <cstdio>
 #include <cstring>
 
+/* ── NT device path → Win32 path conversion ─────────────────────────────── */
+
+/*
+ * The minifilter sends paths like "\Device\HarddiskVolume2\Users\...",
+ * but user-mode APIs (CreateFileW, YARA yr_rules_scan_file) expect
+ * drive-letter paths ("C:\Users\...").
+ *
+ * QueryDosDevice maps "C:" → "\Device\HarddiskVolume2" etc.
+ * We iterate A:-Z: to find the matching volume prefix.
+ */
+static bool
+NtPathToWin32(const WCHAR* ntPath, WCHAR* win32Path, size_t maxChars)
+{
+    WCHAR drive[3] = L"A:";
+    WCHAR target[512];
+
+    for (WCHAR letter = L'A'; letter <= L'Z'; letter++) {
+        drive[0] = letter;
+        if (QueryDosDeviceW(drive, target, _countof(target)) == 0)
+            continue;
+
+        size_t prefixLen = wcslen(target);
+        if (_wcsnicmp(ntPath, target, prefixLen) == 0 &&
+            ntPath[prefixLen] == L'\\') {
+            /* Match — build "C:\remainder" */
+            _snwprintf_s(win32Path, maxChars, _TRUNCATE,
+                         L"%s%s", drive, ntPath + prefixLen);
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /* ── Init / Shutdown ─────────────────────────────────────────────────────── */
 
 void
@@ -127,7 +161,19 @@ OnAccessScanner::OnFileEvent(const SENTINEL_FILE_EVENT& fileEvt,
 
     SENTINEL_SCANNER_EVENT result = {};
 
-    if (!m_scanner->ScanFile(fileEvt.FilePath, SentinelScanOnAccess, result)) {
+    /*
+     * Convert NT device path to Win32 drive-letter path.
+     * The minifilter sends "\Device\HarddiskVolume2\..." but
+     * CreateFileW / YARA need "C:\...".
+     */
+    WCHAR scanPath[SENTINEL_MAX_PATH];
+    const WCHAR* pathToScan = fileEvt.FilePath;
+
+    if (NtPathToWin32(fileEvt.FilePath, scanPath, SENTINEL_MAX_PATH)) {
+        pathToScan = scanPath;
+    }
+
+    if (!m_scanner->ScanFile(pathToScan, SentinelScanOnAccess, result)) {
         /* Scan failed (file locked, permissions, etc.) — don't cache. */
         return false;
     }

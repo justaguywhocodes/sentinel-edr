@@ -147,6 +147,47 @@ EventProcessor::PrintSummary(const SENTINEL_EVENT& evt)
                         etw.EventId,
                         etw.ProcessId,
                         etw.u.DotNet.AssemblyName);
+        } else if (etw.Provider == SentinelEtwDnsClient) {
+            std::printf("[%llu] source=%s provider=DnsClient eventId=%u pid=%lu query=%S type=%u status=%lu\n",
+                        m_eventsProcessed,
+                        SourceName(evt.Source),
+                        etw.EventId,
+                        etw.ProcessId,
+                        etw.u.Dns.QueryName,
+                        etw.u.Dns.QueryType,
+                        etw.u.Dns.QueryStatus);
+        } else if (etw.Provider == SentinelEtwPowerShell) {
+            /* Extract Command Name from the context block for concise output */
+            WCHAR cmdName[256] = {};
+            const WCHAR* search = wcsstr(etw.u.PowerShell.ScriptBlock, L"Command Name");
+            if (search) {
+                /* Skip "Command Name = " */
+                const WCHAR* eq = wcsstr(search, L"= ");
+                if (eq) {
+                    eq += 2;
+                    size_t i = 0;
+                    while (i < 255 && eq[i] != L'\0' && eq[i] != L'\r' && eq[i] != L'\n') {
+                        cmdName[i] = eq[i]; i++;
+                    }
+                    cmdName[i] = L'\0';
+                }
+            }
+            if (cmdName[0] == L'\0') wcscpy_s(cmdName, 256, L"(unknown)");
+
+            std::printf("[%llu] source=%s provider=PowerShell eventId=%u pid=%lu cmd=%S\n",
+                        m_eventsProcessed,
+                        SourceName(evt.Source),
+                        etw.EventId,
+                        etw.ProcessId,
+                        cmdName);
+        } else if (etw.Provider == SentinelEtwKerberos) {
+            std::printf("[%llu] source=%s provider=Kerberos eventId=%u pid=%lu target=%S status=%lu\n",
+                        m_eventsProcessed,
+                        SourceName(evt.Source),
+                        etw.EventId,
+                        etw.ProcessId,
+                        etw.u.Kerberos.TargetName,
+                        etw.u.Kerberos.Status);
         } else {
             std::printf("[%llu] source=%s provider=%d eventId=%u pid=%lu\n",
                         m_eventsProcessed,

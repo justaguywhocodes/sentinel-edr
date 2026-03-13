@@ -22,6 +22,9 @@
 
 #include "etw_consumer.h"
 #include "provider_dotnet.h"
+#include "provider_dns.h"
+#include "provider_powershell.h"
+#include "provider_kerberos.h"
 
 #include <windows.h>
 #include <evntrace.h>
@@ -151,6 +154,66 @@ EtwConsumerInit()
         std::printf("SentinelAgent: Enabled provider: Microsoft-Windows-DotNETRuntime\n");
     }
 
+    /* ── Step 4: Enable DNS Client provider ──────────────────────── */
+
+    status = EnableTraceEx2(
+        s_SessionHandle,
+        &SENTINEL_ETW_DNS_CLIENT,
+        EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+        TRACE_LEVEL_INFORMATION,    /* Level 4 — DNS events fire here */
+        0,                          /* MatchAnyKeyword: 0 = all; parser filters by event ID */
+        0,                          /* MatchAllKeyword */
+        0,                          /* Timeout (0 = async) */
+        NULL                        /* EnableParameters */
+    );
+
+    if (status != ERROR_SUCCESS) {
+        std::printf("SentinelAgent: EnableTraceEx2 (DNS) failed (error %lu)\n",
+            status);
+    } else {
+        std::printf("SentinelAgent: Enabled provider: Microsoft-Windows-DNS-Client\n");
+    }
+
+    /* ── Step 5: Enable PowerShell provider ──────────────────────── */
+
+    status = EnableTraceEx2(
+        s_SessionHandle,
+        &SENTINEL_ETW_POWERSHELL,
+        EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+        TRACE_LEVEL_VERBOSE,        /* Level 5 — script block events fire at Verbose */
+        0,                          /* MatchAnyKeyword: 0 = all; parser filters by event ID */
+        0,                          /* MatchAllKeyword */
+        0,                          /* Timeout (0 = async) */
+        NULL                        /* EnableParameters */
+    );
+
+    if (status != ERROR_SUCCESS) {
+        std::printf("SentinelAgent: EnableTraceEx2 (PowerShell) failed (error %lu)\n",
+            status);
+    } else {
+        std::printf("SentinelAgent: Enabled provider: Microsoft-Windows-PowerShell\n");
+    }
+
+    /* ── Step 6: Enable Kerberos provider ────────────────────────── */
+
+    status = EnableTraceEx2(
+        s_SessionHandle,
+        &SENTINEL_ETW_KERBEROS,
+        EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+        TRACE_LEVEL_INFORMATION,    /* Level 4 — ticket events fire here */
+        0,                          /* MatchAnyKeyword: 0 = all; parser filters by event ID */
+        0,                          /* MatchAllKeyword */
+        0,                          /* Timeout (0 = async) */
+        NULL                        /* EnableParameters */
+    );
+
+    if (status != ERROR_SUCCESS) {
+        std::printf("SentinelAgent: EnableTraceEx2 (Kerberos) failed (error %lu)\n",
+            status);
+    } else {
+        std::printf("SentinelAgent: Enabled provider: Microsoft-Windows-Security-Kerberos\n");
+    }
+
     s_Initialized.store(true);
     return true;
 }
@@ -270,13 +333,22 @@ EtwEventCallback(PEVENT_RECORD pEvent)
                     SENTINEL_ETW_DOTNET_RUNTIME)) {
 
         parsed = ParseDotNetEvent(pEvent, &sEvent);
+
+    } else if (IsEqualGUID(pEvent->EventHeader.ProviderId,
+                            SENTINEL_ETW_DNS_CLIENT)) {
+
+        parsed = ParseDnsEvent(pEvent, &sEvent);
+
+    } else if (IsEqualGUID(pEvent->EventHeader.ProviderId,
+                            SENTINEL_ETW_POWERSHELL)) {
+
+        parsed = ParsePowerShellEvent(pEvent, &sEvent);
+
+    } else if (IsEqualGUID(pEvent->EventHeader.ProviderId,
+                            SENTINEL_ETW_KERBEROS)) {
+
+        parsed = ParseKerberosEvent(pEvent, &sEvent);
     }
-    /* Future providers (P7-T2):
-     *   else if (IsEqualGUID(..., SENTINEL_ETW_POWERSHELL))
-     *       parsed = ParsePowerShellEvent(pEvent, &sEvent);
-     *   else if (IsEqualGUID(..., SENTINEL_ETW_DNS_CLIENT))
-     *       parsed = ParseDnsEvent(pEvent, &sEvent);
-     */
 
     if (parsed) {
         /* Push directly to the pipeline event queue */

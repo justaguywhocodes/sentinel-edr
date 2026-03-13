@@ -15,6 +15,9 @@ add_executable(sentinel-agent
     rules/threshold_engine.cpp
     etw/etw_consumer.cpp
     etw/provider_dotnet.cpp
+    etw/provider_dns.cpp
+    etw/provider_powershell.cpp
+    etw/provider_kerberos.cpp
 )
 
 target_include_directories(sentinel-agent PRIVATE

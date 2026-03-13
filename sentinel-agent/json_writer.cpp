@@ -937,8 +937,58 @@ JsonWriter::EtwPayloadToJson(const SENTINEL_ETW_EVENT& etw)
         }
         break;
 
+    case SentinelEtwDnsClient:
+        json += ",\"queryName\":\"";
+        json += EscapeJson(WcharToUtf8(etw.u.Dns.QueryName));
+        json += "\"";
+
+        json += ",\"queryType\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%u", etw.u.Dns.QueryType);
+        json += numBuf;
+
+        json += ",\"queryStatus\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu", etw.u.Dns.QueryStatus);
+        json += numBuf;
+        break;
+
+    case SentinelEtwPowerShell:
+        json += ",\"scriptBlockId\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.PowerShell.ScriptBlockId);
+        json += numBuf;
+
+        json += ",\"messageNumber\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.PowerShell.MessageNumber);
+        json += numBuf;
+
+        json += ",\"messageTotal\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.PowerShell.MessageTotal);
+        json += numBuf;
+
+        json += ",\"scriptBlock\":\"";
+        json += EscapeJson(WcharToUtf8(etw.u.PowerShell.ScriptBlock));
+        json += "\"";
+        break;
+
+    case SentinelEtwKerberos:
+        json += ",\"targetName\":\"";
+        json += EscapeJson(WcharToUtf8(etw.u.Kerberos.TargetName));
+        json += "\"";
+
+        json += ",\"status\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.Kerberos.Status);
+        json += numBuf;
+
+        json += ",\"ticketFlags\":";
+        _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu",
+            etw.u.Kerberos.TicketFlags);
+        json += numBuf;
+        break;
+
     default:
-        /* Future providers will add their fields here */
         break;
     }
 

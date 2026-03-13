@@ -20,6 +20,9 @@
 int
 main(int argc, char* argv[])
 {
+    /* Disable stdout buffering so ETW events appear immediately in console */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     /* Check for --console flag */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--console") == 0) {

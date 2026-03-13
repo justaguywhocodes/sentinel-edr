@@ -6,6 +6,38 @@ Architecture derived from sensor models in *Evading EDR* by Matt Hand (No Starch
 
 ---
 
+## What Is an EDR?
+
+An **Endpoint Detection and Response** (EDR) agent is software that runs on every endpoint (workstation, server, laptop) in an environment to continuously monitor system activity, detect malicious behavior, and provide the data security teams need to investigate and respond to threats.
+
+### Why EDR Matters
+
+Traditional antivirus relies on static file signatures — it can only catch what it already knows about. Adversaries bypass this trivially with packers, obfuscation, and fileless techniques. EDR takes a fundamentally different approach:
+
+- **Deep visibility.** EDR instruments the operating system at every layer — kernel callbacks, API hooks, ETW traces, script inspection — to capture *what actually happens* on a host, not just what files exist on disk. This telemetry covers process creation, memory operations, registry changes, network connections, DLL loads, and more.
+
+- **Behavioral detection.** Instead of matching file hashes, EDR watches sequences of actions. A single `VirtualAllocEx` call is normal; `VirtualAllocEx(RW)` → `VirtualProtect(RX)` → `CreateRemoteThread` in rapid succession is a classic shellcode injection pattern. EDR correlates these events in real time.
+
+- **Post-compromise investigation.** When an incident occurs, the EDR's telemetry log becomes the forensic record. Analysts can reconstruct the full attack chain — initial access, lateral movement, persistence, data staging — without relying on the attacker to leave artifacts behind.
+
+- **Threat hunting.** Security practitioners proactively query EDR telemetry to search for techniques and indicators that automated rules haven't flagged. The richer the telemetry, the more effective the hunt.
+
+### Who Uses EDR
+
+| Role | How They Use EDR |
+|------|------------------|
+| **SOC Analyst** | Triages alerts, investigates detections, determines scope of compromise |
+| **Incident Responder** | Reconstructs attack timelines from telemetry, identifies affected hosts |
+| **Threat Hunter** | Queries historical telemetry for TTPs and IOCs across the fleet |
+| **Detection Engineer** | Writes and tunes behavioral rules based on ATT&CK techniques |
+| **Red Teamer** | Studies EDR internals to understand defensive coverage and gaps |
+
+### Why Build One?
+
+Understanding how an EDR works at the implementation level — kernel callbacks, inline hooks, filter drivers, ETW plumbing — is the fastest way to understand both what defenders can see and what attackers try to evade. SentinelPOC exists for exactly this purpose: a fully transparent, source-available EDR that security practitioners can study, modify, and experiment with.
+
+---
+
 ## What It Does
 
 SentinelPOC instruments a Windows system at every layer — kernel callbacks, inline API hooks, ETW tracing, AMSI integration, and file system filtering — to collect security telemetry and detect adversary techniques in real time.
@@ -18,8 +50,11 @@ SentinelPOC instruments a Windows system at every layer — kernel callbacks, in
 - **8 ETW providers** for .NET assembly loads, PowerShell script blocks, DNS queries, Kerberos auth, RPC calls, and more
 - **Custom AMSI provider** that scans PowerShell/VBScript/JScript content against YARA rules
 - **On-access YARA scanning** triggered by minifilter file events with hash-based caching
+- **Memory scanning** for unbacked executable regions (shellcode injection detection)
 - **Three-tier detection engine**: single-event rules, time-ordered sequence rules, and threshold-based alerting
 - **14 YARA rules** detecting Cobalt Strike, Mimikatz, packed binaries, suspicious PE characteristics, and XLL shellcode
+- **CLI management tool** for real-time status, alerts, process inspection, network connections, and configuration queries
+- **INI-style configuration file** with runtime-tunable paths, scanner limits, and thresholds
 - **JSON-lines telemetry logging** with automatic rotation
 
 ---
@@ -53,12 +88,14 @@ SentinelPOC instruments a Windows system at every layer — kernel callbacks, in
 │  ├── Event Queue ──► Processing Thread                          │
 │  │                    ├── Process table enrichment               │
 │  │                    ├── On-access YARA scanner                 │
+│  │                    ├── Memory scanner (unbacked regions)      │
 │  │                    ├── Single-event rule engine               │
 │  │                    ├── Sequence rule engine                   │
 │  │                    ├── Threshold rule engine                  │
-│  │                    └── JSON log writer                        │
+│  │                    └── JSON log writer (auto-rotate)          │
 │  │                                                              │
-│  └── Console / Service output                                   │
+│  ├── Command Handler ◄──────── sentinel-cli.exe (named pipe)    │
+│  └── Config Loader ◄──────── sentinel.conf (INI-style)          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -70,9 +107,59 @@ SentinelPOC instruments a Windows system at every layer — kernel callbacks, in
 |-----------|----------|-------------|
 | **sentinel-drv** | C17 (WDK) | Kernel-mode WDM driver with 8 callback types, minifilter, WFP callout, and KAPC injection |
 | **sentinel-hook** | C17 | User-mode hooking DLL injected via kernel APC. Inline hooks on 13 ntdll/kernel32 functions |
-| **sentinel-agent** | C++20 | Windows service: event aggregation, rule engines, ETW consumer, AMSI provider, YARA scanner |
+| **sentinel-agent** | C++20 | Windows service: event aggregation, rule engines, ETW consumer, AMSI provider, YARA scanner, config loader |
 | **sentinel-amsi** | C++20 | AMSI provider DLL registered with Windows for script content scanning |
-| **sentinel-cli** | C++20 | Console management tool (stub — Phase 9) |
+| **sentinel-cli** | C++20 | Console management tool: status, alerts, scanning, process/connection inspection, config queries |
+
+---
+
+## CLI Commands
+
+```
+sentinel-cli <command> [args] [--json]
+```
+
+| Command | Description |
+|---------|-------------|
+| `status` | Agent health, driver status, uptime, rule counts, queue depth |
+| `alerts [N]` | Show last N alerts with severity, rule name, trigger, and PID (default: 20) |
+| `scan <path>` | Trigger on-demand YARA scan on a file |
+| `rules reload` | Hot-reload behavioral and YARA rules from disk |
+| `connections` | Network connection table: remote IP, port, protocol, hit count, PIDs |
+| `processes` | Tracked processes with PPID, integrity level, elevation status |
+| `hooks` | Hook DLL injection status per tracked process |
+| `config` | Show active agent configuration (paths, scanner limits, thresholds) |
+
+Add `--json` to any command for raw JSON output suitable for scripting and SIEM ingestion.
+
+---
+
+## Configuration
+
+The agent reads an INI-style config file at startup. Default location: `C:\SentinelPOC\sentinel.conf`. Override with `--config <path>`.
+
+Missing keys or a missing file gracefully fall back to compiled-in defaults.
+
+```ini
+[paths]
+log_path        = C:\SentinelPOC\agent_events.jsonl
+amsi_dll        = C:\SentinelPOC\sentinel-amsi.dll
+rules_dir       = C:\SentinelPOC\rules
+yara_rules_dir  = C:\SentinelPOC\yara-rules
+
+[scanner]
+max_file_size_mb   = 50      # Max file size for on-access YARA scan
+max_region_size_mb = 10      # Max memory region size for memory scanner
+cache_ttl_sec      = 300     # Scan result cache lifetime (seconds)
+
+[logging]
+max_log_size_mb = 100        # Log rotation threshold
+
+[network]
+max_events_per_sec = 100     # Per-PID network event rate limit
+```
+
+Query the running agent's active config with `sentinel-cli config`.
 
 ---
 
@@ -91,7 +178,7 @@ SentinelPOC instruments a Windows system at every layer — kernel callbacks, in
 | HookDll | Inline hooks | 13 API calls: memory ops, thread ops, process open, pipe create |
 | ETW | 8 providers | .NET assemblies, PowerShell scripts, DNS, Kerberos, RPC, services, kernel process |
 | AMSI | COM provider | Script content scanned by PowerShell/VBScript/JScript hosts |
-| Scanner | YARA engine | On-access file scan results with rule match details |
+| Scanner | YARA engine | On-access file scan and memory region scan results with rule match details |
 
 ---
 
@@ -151,6 +238,7 @@ If WDK is not installed, `sentinel-drv` is skipped automatically. All other comp
 
 Output binaries land in `build/bin/Release/`:
 - `sentinel-agent.exe` — the main agent service
+- `sentinel-cli.exe` — management CLI
 - `sentinel-drv.sys` — kernel driver (requires WDK)
 - `sentinel-hook.dll` — hooking DLL (injected by driver)
 - `sentinel-amsi.dll` — AMSI provider (registered by agent)
@@ -179,8 +267,12 @@ New-Item -ItemType Directory -Force -Path C:\SentinelPOC
 
 # Copy binaries
 Copy-Item build\bin\Release\sentinel-agent.exe C:\SentinelPOC\
-Copy-Item build\bin\Release\sentinel-hook.dll  C:\SentinelPOC\
-Copy-Item build\bin\Release\sentinel-amsi.dll  C:\SentinelPOC\
+Copy-Item build\bin\Release\sentinel-cli.exe   C:\SentinelPOC\
+Copy-Item build\bin\Release\sentinel-hook.dll   C:\SentinelPOC\
+Copy-Item build\bin\Release\sentinel-amsi.dll   C:\SentinelPOC\
+
+# Copy configuration
+Copy-Item sentinel.conf                         C:\SentinelPOC\
 
 # Copy rules
 Copy-Item -Recurse rules\       C:\SentinelPOC\rules\
@@ -206,17 +298,24 @@ sc.exe start SentinelDrv
 
 ```powershell
 # Run from an elevated command prompt
-C:\SentinelPOC\sentinel-agent.exe
+C:\SentinelPOC\sentinel-agent.exe --console
+```
+
+With a custom config file:
+
+```powershell
+C:\SentinelPOC\sentinel-agent.exe --console --config C:\SentinelPOC\sentinel.conf
 ```
 
 The agent will:
-1. Load YAML detection rules from `C:\SentinelPOC\rules\`
-2. Compile YARA rules from `C:\SentinelPOC\yara-rules\`
-3. Connect to the kernel driver's filter communication port
-4. Start the named pipe server for hook DLL telemetry
-5. Initialize ETW consumers for 8 system providers
-6. Register the custom AMSI provider
-7. Begin processing events and writing to the JSON log
+1. Load configuration from `sentinel.conf` (or use defaults)
+2. Load YAML detection rules from the configured rules directory
+3. Compile YARA rules from the configured YARA rules directory
+4. Connect to the kernel driver's filter communication port
+5. Start the named pipe server for hook DLL telemetry
+6. Initialize ETW consumers for 8 system providers
+7. Register the custom AMSI provider
+8. Begin processing events and writing to the JSON log
 
 Press **Ctrl+C** to stop cleanly.
 
@@ -229,11 +328,24 @@ sc.exe start SentinelAgent
 
 ### 4. Verify operation
 
-With the agent running, you should see:
-- Startup messages confirming rule loading and component initialization
-- Scanner alerts when malicious files are written to disk
-- Rule engine alerts when suspicious behavior is detected
-- All telemetry written to `C:\SentinelPOC\telemetry.jsonl`
+With the agent running, open a second terminal:
+
+```powershell
+# Check agent health
+C:\SentinelPOC\sentinel-cli.exe status
+
+# View active configuration
+C:\SentinelPOC\sentinel-cli.exe config
+
+# List tracked processes
+C:\SentinelPOC\sentinel-cli.exe processes
+
+# View network connections
+C:\SentinelPOC\sentinel-cli.exe connections
+
+# Check recent alerts
+C:\SentinelPOC\sentinel-cli.exe alerts
+```
 
 ---
 
@@ -252,7 +364,7 @@ Within a few seconds the agent console should display:
 [NNN] source=Scanner type=OnAccess path=C:\Users\...\evil.txt match=YES rule=Mimikatz_Binary
 ```
 
-The minifilter detects the file creation, computes a SHA-256 hash, and the on-access scanner runs YARA rules against the file. Results are cached for 5 minutes to avoid redundant rescans.
+The minifilter detects the file creation, computes a SHA-256 hash, and the on-access scanner runs YARA rules against the file. Results are cached (configurable via `cache_ttl_sec`) to avoid redundant rescans.
 
 ---
 
@@ -261,10 +373,11 @@ The minifilter detects the file creation, computes a SHA-256 hash, and the on-ac
 ```
 claude-edr/
 ├── CMakeLists.txt              Top-level build configuration
+├── sentinel.conf               Default agent configuration file
 ├── common/                     Shared headers
 │   ├── telemetry.h            Event schema (SENTINEL_EVENT union)
 │   ├── constants.h            System-wide constants
-│   ├── ipc.h                  Named pipe protocol
+│   ├── ipc.h                  Named pipe protocol + command types
 │   └── ipc_serialize.h        Binary serialization helpers
 ├── sentinel-drv/              Kernel-mode driver
 │   ├── main.c                 DriverEntry, cleanup, unload
@@ -286,15 +399,19 @@ claude-edr/
 │   ├── hooks_process.c        Process operation hooks
 │   └── pipe_client.c          Named pipe telemetry sender
 ├── sentinel-agent/            Agent service
-│   ├── main.cpp               Entry point
+│   ├── main.cpp               Entry point (--console, --config)
 │   ├── service.cpp            SCM handler + console mode
+│   ├── config.cpp             INI config parser + serializer
+│   ├── config.h               SentinelConfig struct + API
 │   ├── pipeline.cpp           Event queue + receiver threads
 │   ├── event_processor.cpp    Event routing + enrichment
-│   ├── json_writer.cpp        JSON-lines log output
+│   ├── cmd_handler.cpp        CLI command dispatch (8 commands)
+│   ├── json_writer.cpp        JSON-lines log output + rotation
 │   ├── network_table.cpp      Connection tracking table
 │   ├── scanner/
 │   │   ├── yara_scanner.cpp   libyara integration
-│   │   └── onaccess_scanner.cpp  File event → YARA scan
+│   │   ├── onaccess_scanner.cpp  File event → YARA scan
+│   │   └── memory_scanner.cpp Unbacked region detection
 │   ├── rules/
 │   │   ├── rule_engine.cpp    Single-event rule evaluation
 │   │   ├── sequence_engine.cpp  Time-ordered sequence detection
@@ -305,7 +422,8 @@ claude-edr/
 │   └── amsi/
 │       └── amsi_provider.cpp  Custom AMSI COM provider
 ├── sentinel-amsi/             AMSI provider DLL host
-├── sentinel-cli/              CLI tool (stub)
+├── sentinel-cli/              CLI management tool
+│   └── main.cpp               8 commands + pretty-printers
 ├── yara-rules/                YARA detection rules (14 rules)
 ├── rules/                     YAML behavioral rules (5 rules)
 ├── tests/                     Integration tests
@@ -321,18 +439,18 @@ claude-edr/
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| P0 | Project scaffolding, build system, shared headers | ✅ Complete |
-| P1 | Process and thread kernel callbacks | ✅ Complete |
-| P2 | Object, image-load, and registry callbacks + KAPC injection | ✅ Complete |
-| P3 | User-mode hooking DLL with 13 inline hooks | ✅ Complete |
-| P4 | Agent service with event pipeline and 3-tier rule engine | ✅ Complete |
-| P5 | Minifilter, file hashing, and named pipe monitoring | ✅ Complete |
-| P6 | WFP network callout and connection table | ✅ Complete |
-| P7 | ETW consumer (8 providers) and custom AMSI provider | ✅ Complete |
-| P8 | YARA scanner integration and on-access file scanning | ✅ Complete |
-| P9 | CLI management tool | 🔲 Pending |
-| P10 | Integration testing (end-to-end attack chain) | 🔲 Pending |
-| P11 | Hardening and self-protection (evasion detection) | 🔲 Pending |
+| P0 | Project scaffolding, build system, shared headers | Done |
+| P1 | Process and thread kernel callbacks | Done |
+| P2 | Object, image-load, and registry callbacks + KAPC injection | Done |
+| P3 | User-mode hooking DLL with 13 inline hooks | Done |
+| P4 | Agent service with event pipeline and 3-tier rule engine | Done |
+| P5 | Minifilter, file hashing, and named pipe monitoring | Done |
+| P6 | WFP network callout and connection table | Done |
+| P7 | ETW consumer (8 providers) and custom AMSI provider | Done |
+| P8 | YARA scanner integration, on-access scanning, memory scanning | Done |
+| P9 | CLI management tool, inspection commands, configuration file | Done |
+| P10 | Integration testing (end-to-end attack chain) | Pending |
+| P11 | Hardening and self-protection (evasion detection) | Pending |
 
 See `REQUIREMENTS.md` for the full implementation roadmap.
 

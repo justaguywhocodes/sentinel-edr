@@ -2,13 +2,15 @@
  * sentinel-agent/pipeline.cpp
  * Event processing pipeline implementation.
  *
- * Three thread groups:
+ * Four thread groups:
  *   1. Driver port receiver — connects to \SentinelPort, receives
  *      SENTINEL_FILTER_MSG via FilterGetMessage, pushes events to queue.
  *   2. Pipe server — listens on \\.\pipe\SentinelTelemetry, accepts
  *      hook DLL connections, spawns per-client handler threads that
  *      deserialize events and push to queue.
- *   3. Processing thread — dequeues events and logs them.
+ *   3. ETW consumer thread — blocked on ProcessTrace, receives real-time
+ *      ETW events and pushes them to the queue.
+ *   4. Processing thread — dequeues events and logs them.
  */
 
 #include <windows.h>
@@ -22,6 +24,7 @@
 
 #include "pipeline.h"
 #include "event_processor.h"
+#include "etw/etw_consumer.h"
 #include "ipc.h"
 #include "ipc_serialize.h"
 #include "constants.h"
@@ -77,8 +80,8 @@ EventQueue::Size()
 
 /* ── Global pipeline state ────────────────────────────────────────────────── */
 
-static EventQueue           g_EventQueue;
-static std::atomic<bool>    g_Shutdown{false};
+EventQueue                  g_EventQueue;
+std::atomic<bool>           g_Shutdown{false};
 static HANDLE               g_ShutdownEvent = nullptr;
 
 /* Threads */
@@ -387,6 +390,14 @@ PipelineStart()
 
     AgentLog("SentinelAgent: Pipeline starting...\n");
 
+    /* Initialize and start ETW consumer (before other threads) */
+    if (EtwConsumerInit()) {
+        EtwConsumerStart();
+    } else {
+        AgentLog("SentinelAgent: WARNING: ETW consumer init failed "
+                 "(ETW events will not be collected)\n");
+    }
+
     /* Start threads */
     g_PortReceiverThread = std::thread(DriverPortReceiverThread);
     g_PipeListenerThread = std::thread(PipeListenerThread);
@@ -404,6 +415,9 @@ PipelineStop()
         SetEvent(g_ShutdownEvent);
     }
     g_EventQueue.Shutdown();
+
+    /* Stop ETW consumer first (unblocks ProcessTrace, joins its thread) */
+    EtwConsumerStop();
 
     /*
      * Cancel blocking I/O on the pipe listener thread.

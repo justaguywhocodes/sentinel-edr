@@ -66,6 +66,11 @@ static const char* g_TamperTypeNames[] = {
     "AmsiPatched", "DirectSyscall", "NtdllRemap",
 };
 
+static const char* g_EtwProviderNames[] = {
+    "DotNETRuntime", "PowerShell", "DnsClient", "Kerberos",
+    "Services", "AMSI", "RPC", "KernelProcess",
+};
+
 static const char*
 SafeLookup(const char* table[], int count, int index)
 {
@@ -424,6 +429,8 @@ JsonWriter::PayloadToJson(const SENTINEL_EVENT& evt)
         return NetworkPayloadToJson(evt.Payload.Network);
     case SentinelSourceAmsi:
         return AmsiPayloadToJson(evt.Payload.Amsi);
+    case SentinelSourceEtw:
+        return EtwPayloadToJson(evt.Payload.Etw);
     case SentinelSourceRuleEngine:
         return AlertPayloadToJson(evt.Payload.Alert);
     case SentinelSourceSelfProtect:
@@ -878,6 +885,62 @@ JsonWriter::TamperPayloadToJson(const SENTINEL_TAMPER_EVENT& tamper)
     json += ",\"detail\":\"";
     json += EscapeJson(WcharToUtf8(tamper.Detail));
     json += "\"";
+
+    json += '}';
+    return json;
+}
+
+std::string
+JsonWriter::EtwPayloadToJson(const SENTINEL_ETW_EVENT& etw)
+{
+    std::string json;
+    char numBuf[32];
+
+    json += "{\"provider\":\"";
+    json += SafeLookup(g_EtwProviderNames,
+        (int)(sizeof(g_EtwProviderNames) / sizeof(g_EtwProviderNames[0])),
+        etw.Provider);
+    json += "\"";
+
+    json += ",\"eventId\":";
+    _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%u", etw.EventId);
+    json += numBuf;
+
+    json += ",\"level\":";
+    _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%u", etw.Level);
+    json += numBuf;
+
+    json += ",\"keyword\":\"";
+    _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "0x%llx",
+        (unsigned long long)etw.Keyword);
+    json += numBuf;
+    json += "\"";
+
+    json += ",\"processId\":";
+    _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu", etw.ProcessId);
+    json += numBuf;
+
+    json += ",\"threadId\":";
+    _snprintf_s(numBuf, sizeof(numBuf), _TRUNCATE, "%lu", etw.ThreadId);
+    json += numBuf;
+
+    /* Provider-specific fields */
+    switch (etw.Provider) {
+    case SentinelEtwDotNet:
+        json += ",\"assemblyName\":\"";
+        json += EscapeJson(WcharToUtf8(etw.u.DotNet.AssemblyName));
+        json += "\"";
+        if (etw.u.DotNet.ClassName[0] != L'\0') {
+            json += ",\"className\":\"";
+            json += EscapeJson(WcharToUtf8(etw.u.DotNet.ClassName));
+            json += "\"";
+        }
+        break;
+
+    default:
+        /* Future providers will add their fields here */
+        break;
+    }
 
     json += '}';
     return json;

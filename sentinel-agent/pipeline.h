@@ -4,12 +4,15 @@
  *
  * Architecture:
  *   Driver port receiver thread  ──┐
- *                                  ├──► EventQueue ──► Processing thread
- *   Pipe server receiver thread(s)─┘
+ *                                  │
+ *   Pipe server receiver thread(s)─┼──► EventQueue ──► Processing thread
+ *                                  │
+ *   ETW consumer thread           ─┘
  *
- * The pipeline receives SENTINEL_EVENT from two sources:
+ * The pipeline receives SENTINEL_EVENT from three sources:
  *   1. Driver filter communication port (\SentinelPort)
  *   2. Named pipe from hook DLLs (\\.\pipe\SentinelTelemetry)
+ *   3. ETW real-time trace session (e.g. .NET Runtime assembly loads)
  *
  * All events are funneled into a thread-safe EventQueue and consumed
  * by a processing thread (currently logs to file; future phases add
@@ -23,6 +26,7 @@
 #include <deque>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 #include "telemetry.h"
 
 /* ── Thread-safe event queue ──────────────────────────────────────────────── */
@@ -50,6 +54,15 @@ private:
     std::condition_variable     m_cv;
     bool                        m_shutdown = false;
 };
+
+/* ── Global pipeline objects (defined in pipeline.cpp) ────────────────────── */
+
+/*
+ * Exposed for sub-components (ETW consumer, pipe server) that need to
+ * push events into the queue from their own threads.
+ */
+extern EventQueue        g_EventQueue;
+extern std::atomic<bool> g_Shutdown;
 
 /* ── Pipeline lifecycle ───────────────────────────────────────────────────── */
 

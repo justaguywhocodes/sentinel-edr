@@ -138,6 +138,23 @@ EventProcessor::PrintSummary(const SENTINEL_EVENT& evt)
          * dump (every 30s) provides the same data in aggregate form.
          * Events are still logged to the JSON file.
          */
+    } else if (evt.Source == SentinelSourceEtw) {
+        const auto& etw = evt.Payload.Etw;
+        if (etw.Provider == SentinelEtwDotNet) {
+            std::printf("[%llu] source=%s provider=DotNet eventId=%u pid=%lu assembly=%S\n",
+                        m_eventsProcessed,
+                        SourceName(evt.Source),
+                        etw.EventId,
+                        etw.ProcessId,
+                        etw.u.DotNet.AssemblyName);
+        } else {
+            std::printf("[%llu] source=%s provider=%d eventId=%u pid=%lu\n",
+                        m_eventsProcessed,
+                        SourceName(evt.Source),
+                        etw.Provider,
+                        etw.EventId,
+                        etw.ProcessId);
+        }
     } else if (evt.Source == SentinelSourceDriverProcess) {
         const auto& proc = evt.Payload.Process;
         std::printf("[%llu] source=%s %s pid=%lu ppid=%lu\n",

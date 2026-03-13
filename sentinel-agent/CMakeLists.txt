@@ -13,6 +13,8 @@ add_executable(sentinel-agent
     rules/rule_parser.cpp
     rules/sequence_engine.cpp
     rules/threshold_engine.cpp
+    etw/etw_consumer.cpp
+    etw/provider_dotnet.cpp
 )
 
 target_include_directories(sentinel-agent PRIVATE
@@ -21,9 +23,10 @@ target_include_directories(sentinel-agent PRIVATE
 )
 
 # fltLib.lib — FilterConnectCommunicationPort, FilterGetMessage
-# advapi32.lib — Service control manager, token queries
+# advapi32.lib — Service control manager, token queries, ETW (StartTrace, EnableTraceEx2, etc.)
 # ole32.lib — CoCreateGuid (SentinelEventInit)
-target_link_libraries(sentinel-agent PRIVATE fltLib.lib advapi32.lib ole32.lib)
+# tdh.lib — Trace Data Helper (ETW event parsing, future use)
+target_link_libraries(sentinel-agent PRIVATE fltLib.lib advapi32.lib ole32.lib tdh.lib)
 
 set_target_properties(sentinel-agent PROPERTIES
     CXX_STANDARD 20

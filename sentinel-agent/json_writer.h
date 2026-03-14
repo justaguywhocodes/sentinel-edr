@@ -41,6 +41,22 @@ public:
     /* Current bytes written to the active log file. */
     ULONGLONG BytesWritten() const { return m_bytesWritten; }
 
+    /*
+     * Serialize an event to a JSON string (no trailing newline).
+     * Public static so other output writers (e.g. SIEM) can reuse.
+     * P9-T5: SIEM Integration.
+     */
+    static std::string SerializeEvent(const SENTINEL_EVENT& evt,
+                                       const std::wstring& parentImagePath);
+
+    /* String helpers — public static for shared use */
+    static std::string EscapeJson(const std::string& s);
+    static std::string WcharToUtf8(const WCHAR* ws);
+    static std::string GuidToString(const GUID& guid);
+    static std::string TimestampToIso8601(const LARGE_INTEGER& ts);
+    static std::string PointerToHex(ULONG_PTR ptr);
+    static std::string DwordToHex(ULONG val);
+
 private:
     HANDLE      m_hFile;
     std::string m_basePath;
@@ -52,36 +68,28 @@ private:
     void RotateIfNeeded();
     void ReopenFile();
 
-    /* Serialization helpers */
-    std::string EventToJson(const SENTINEL_EVENT& evt,
-                            const std::wstring& parentImagePath);
-    std::string ProcessCtxToJson(const SENTINEL_PROCESS_CTX& ctx,
-                                 const std::wstring& parentImagePath);
-    std::string PayloadToJson(const SENTINEL_EVENT& evt);
+    /* Serialization helpers (static — no instance state needed) */
+    static std::string EventToJson(const SENTINEL_EVENT& evt,
+                                    const std::wstring& parentImagePath);
+    static std::string ProcessCtxToJson(const SENTINEL_PROCESS_CTX& ctx,
+                                         const std::wstring& parentImagePath);
+    static std::string PayloadToJson(const SENTINEL_EVENT& evt);
 
     /* Per-payload serializers */
-    std::string HookPayloadToJson(const SENTINEL_HOOK_EVENT& hook);
-    std::string ProcessPayloadToJson(const SENTINEL_PROCESS_EVENT& proc);
-    std::string ThreadPayloadToJson(const SENTINEL_THREAD_EVENT& thread);
-    std::string ObjectPayloadToJson(const SENTINEL_OBJECT_EVENT& obj);
-    std::string ImageLoadPayloadToJson(const SENTINEL_IMAGELOAD_EVENT& img);
-    std::string RegistryPayloadToJson(const SENTINEL_REGISTRY_EVENT& reg);
-    std::string FilePayloadToJson(const SENTINEL_FILE_EVENT& file);
-    std::string PipePayloadToJson(const SENTINEL_PIPE_EVENT& pipe);
-    std::string NetworkPayloadToJson(const SENTINEL_NETWORK_EVENT& net);
-    std::string AmsiPayloadToJson(const SENTINEL_AMSI_EVENT& amsi);
-    std::string AlertPayloadToJson(const SENTINEL_ALERT_EVENT& alert);
-    std::string TamperPayloadToJson(const SENTINEL_TAMPER_EVENT& tamper);
-    std::string EtwPayloadToJson(const SENTINEL_ETW_EVENT& etw);
-    std::string ScannerPayloadToJson(const SENTINEL_SCANNER_EVENT& scan);
-
-    /* String helpers */
-    static std::string EscapeJson(const std::string& s);
-    static std::string WcharToUtf8(const WCHAR* ws);
-    static std::string GuidToString(const GUID& guid);
-    static std::string TimestampToIso8601(const LARGE_INTEGER& ts);
-    static std::string PointerToHex(ULONG_PTR ptr);
-    static std::string DwordToHex(ULONG val);
+    static std::string HookPayloadToJson(const SENTINEL_HOOK_EVENT& hook);
+    static std::string ProcessPayloadToJson(const SENTINEL_PROCESS_EVENT& proc);
+    static std::string ThreadPayloadToJson(const SENTINEL_THREAD_EVENT& thread);
+    static std::string ObjectPayloadToJson(const SENTINEL_OBJECT_EVENT& obj);
+    static std::string ImageLoadPayloadToJson(const SENTINEL_IMAGELOAD_EVENT& img);
+    static std::string RegistryPayloadToJson(const SENTINEL_REGISTRY_EVENT& reg);
+    static std::string FilePayloadToJson(const SENTINEL_FILE_EVENT& file);
+    static std::string PipePayloadToJson(const SENTINEL_PIPE_EVENT& pipe);
+    static std::string NetworkPayloadToJson(const SENTINEL_NETWORK_EVENT& net);
+    static std::string AmsiPayloadToJson(const SENTINEL_AMSI_EVENT& amsi);
+    static std::string AlertPayloadToJson(const SENTINEL_ALERT_EVENT& alert);
+    static std::string TamperPayloadToJson(const SENTINEL_TAMPER_EVENT& tamper);
+    static std::string EtwPayloadToJson(const SENTINEL_ETW_EVENT& etw);
+    static std::string ScannerPayloadToJson(const SENTINEL_SCANNER_EVENT& scan);
 };
 
 /* ── Name lookup functions ───────────────────────────────────────────────── */

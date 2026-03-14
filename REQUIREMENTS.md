@@ -1,543 +1,425 @@
-# SentinelPOC — Requirements Document v1.0
+# SentinelEDR — Requirements Document v1.0
 
 **A Proof-of-Concept Endpoint Detection & Response Agent for Windows x64**
 
-Version 1.0 — Claude Code Implementation Phases
-March 2026
+Version 1.0 — Initial Requirements + Implementation Phases | March 2026
 
 > Architecture derived from sensor models in *Evading EDR* by Matt Hand (No Starch Press, 2023)
-> Phases structured for iterative implementation with Claude Code
 
 ---
 
-## How To Use This Document With Claude Code
+# PART I: REQUIREMENTS & ARCHITECTURE
 
-This requirements document is structured as a sequence of implementation phases, each broken into discrete tasks sized for a single Claude Code session. Each task includes the specific files to create or modify, concrete acceptance criteria, and an estimated complexity rating.
+## 1. Executive Summary
 
-### Workflow Per Task
+SentinelEDR is a proof-of-concept Endpoint Detection and Response (EDR) agent for 64-bit Windows, built entirely in C/C++. Its purpose is to serve as a purple-team training platform: a fully transparent, open-architecture EDR whose internals can be studied, attacked, and improved upon by both offensive and defensive security practitioners.
 
-1. Open a Claude Code session and provide the task ID (e.g., "Implement task P1-T3") along with this document as context.
-2. Claude Code generates the implementation. Review the output against the acceptance criteria listed in the task row.
-3. Run the specified build/test commands. If the acceptance criteria pass, commit and move to the next task.
-4. If a task fails or needs iteration, stay in the same session and refine before moving on. Tasks within a phase are ordered by dependency.
+The project's design is directly informed by the sensor architecture described in Matt Hand's *Evading EDR* (No Starch Press, 2023). Each sensor component the book deconstructs—from kernel callback routines and userland function hooks to ETW consumers, minifilters, and AMSI providers—becomes a discrete, testable module within SentinelEDR. The Chapter 13 case study (a full detection-aware attack chain from initial access through exfiltration) serves as the primary integration test plan.
+
+This document is organized into two parts. Part I captures the system requirements: what SentinelEDR must do, how its components are structured, and the acceptance criteria for each sensor. Part II breaks the implementation into phased tasks sized for iterative development with Claude Code.
+
+## 2. Project Goals & Non-Goals
+
+### 2.1 Goals
+
+- Build a working, modular EDR agent that implements the sensor components described in *Evading EDR* Chapters 1–12.
+- Provide a vendor-agnostic reference implementation that maps to the book's "Basic," "Intermediate," and "Advanced" agent design tiers.
+- Detect the full attack chain from Chapter 13 (XLL payload delivery, local shellcode execution, C2 establishment, persistence via preview handlers, Seatbelt-style recon, privilege escalation, lateral movement, and file exfiltration).
+- Serve as a purple-team training tool where red teamers can test evasion techniques against a fully instrumented, source-available EDR.
+- Generate structured telemetry (JSON) that can be piped to a SIEM, ELK stack, or a simple local dashboard for analysis.
+- Maintain a clean C/C++ codebase with minimal external dependencies, buildable with the Windows Driver Kit (WDK) and Visual Studio.
+
+### 2.2 Non-Goals (v1)
+
+- Production deployment or commercial use. SentinelEDR is a research and training tool.
+- WHQL driver signing or ELAM certification (test-signing mode is acceptable for v1).
+- Cloud-based backend analytics, machine learning, or global reputation scoring.
+- Cross-platform support (Linux/macOS agents are out of scope).
+- Hypervisor-based detection or adversary deception (classified as "Advanced" in Ch. 1, deferred to v2+).
+- Remote management server (v1 is local-only; see v2 Roadmap in Part II).
+
+## 3. System Architecture
+
+The architecture follows the "Intermediate" agent design from Chapter 1, with hooks into the "Advanced" tier where feasible without ELAM/PPL. The system is composed of four primary binaries and a shared telemetry protocol.
+
+### 3.1 Component Overview
+
+| Component | Mode | Responsibility |
+|-----------|------|----------------|
+| **sentinel-drv** `.sys` | Kernel | Registers all kernel callback routines (process, thread, object, image-load, registry), minifilter for filesystem I/O, WFP callout for network filtering. Communicates telemetry to agent via filter communication port. |
+| **sentinel-hook** `.dll` | User (injected) | Function-hooking DLL injected into monitored processes via KAPC injection. Hooks ntdll exports using inline trampoline hooks. |
+| **sentinel-agent** `.exe` | User (service) | Central agent service. Aggregates telemetry from driver, hooking DLL, ETW consumers, and scanner. Runs detection rule engine. Emits alerts to log sink. Manages AMSI provider registration. |
+| **sentinel-cli** `.exe` | User (console) | Management CLI for querying agent status, reviewing alerts, triggering scans, loading rules, and pulling signature updates from Git. |
+
+### 3.2 Telemetry Protocol
+
+All sensor components emit telemetry as JSON-structured events over a named pipe (`\\.\pipe\SentinelTelemetry`). Each event includes a common envelope: **event_id** (UUID v4), **timestamp** (high-resolution), **source** (sensor identifier), **process_context** (PID, PPID, image path, command line, user SID, session ID, integrity level), and **payload** (sensor-specific data).
+
+### 3.3 Detection Engine
+
+The agent implements a rule-based detection engine inspired by the Elastic detection rules referenced in Chapter 1. Rules are defined in YAML and support three evaluation models: **single-event rules** (match on one event, e.g., file hash match), **sequence rules** (ordered events within a time window, e.g., alloc→protect→thread), and **threshold rules** (event count exceeds threshold in window). Each rule specifies an action: LOG, BLOCK, or DECEIVE.
+
+### 3.4 Signature Updates
+
+Detection rules (YAML) and YARA signatures are stored in Git repositories. `sentinel-cli rules update` pulls latest rules, validates YAML/YARA, and triggers hot-reload. Validation failure rolls back the pull automatically.
+
+## 4. Sensor Component Requirements
+
+### 4.1 Kernel Callback Driver (Chapters 3–5)
+
+#### 4.1.1 Process & Thread Notifications (Ch. 3)
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Callback API** | `PsSetCreateProcessNotifyRoutineEx` for process creation/termination. `PsSetCreateThreadNotifyRoutineEx` for thread creation/termination. |
+| **Telemetry** | Process: image path, command line, PID, PPID, creating thread ID, token info (SID, integrity), PE metadata. Thread: TID, start address, owning PID, remote vs. local flag. |
+| **Detection targets** | Suspicious parent-child relationships. Remote thread creation into sensitive processes. fork&run injection. |
+| **Test evasions** | Command-line tampering. PPID spoofing. Process hollowing/herpaderping. fork&run injection. |
+
+#### 4.1.2 Object Notifications (Ch. 4)
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Callback API** | `ObRegisterCallbacks` for Process and Thread object types. |
+| **Telemetry** | Source PID/TID, target PID, requested/granted access mask, operation type. |
+| **Detection targets** | Handle requests to lsass.exe, csrss.exe. Credential dumping signatures. |
+| **Test evasions** | Handle theft. Racing the callback routine. |
+
+#### 4.1.3 Image-Load & Registry Notifications (Ch. 5)
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Callback API** | `PsSetLoadImageNotifyRoutineEx` for image loads. `CmRegisterCallbackEx` for registry. |
+| **Telemetry** | Image: path, base address, size, signing status, PID. Registry: operation type, key path, value name, data. |
+| **Detection targets** | Unsigned DLLs in sensitive processes. Persistence registry keys. Preview handler registration (Ch. 13). |
+| **Test evasions** | Tunneling tools. Callback entry overwrites via vulnerable driver. |
+| **KAPC injection** | Image-load triggers injection of sentinel-hook.dll via kernel APC queuing. |
+
+### 4.2 Filesystem Minifilter Driver (Chapter 6)
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Altitude** | FSFilter Anti-Virus range (320000–329998). |
+| **Operations** | IRP_MJ_CREATE, IRP_MJ_WRITE, IRP_MJ_SET_INFORMATION, IRP_MJ_CREATE_NAMED_PIPE. |
+| **Telemetry** | File path, operation, PID, SHA-256 hash (async), file size, timestamp. |
+| **Detection targets** | Malware drops. Ransomware patterns. Named pipe C2. XLL writes (Ch. 13). |
+| **Test evasions** | Minifilter unloading. Filter interference. Pre/post callback ordering issues. |
+
+### 4.3 Network Filter Driver (Chapter 7)
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Framework** | WFP callout driver. |
+| **Layers** | Outbound/inbound transport V4/V6, stream V4. |
+| **Telemetry** | Source/dest IP+port, protocol, PID, direction, bytes, domain. |
+| **Detection targets** | C2 beaconing. Lateral movement (SMB, WMI, WinRM). DNS tunneling. |
+| **Test evasions** | Slow beaconing. Domain fronting. Common port abuse. |
+
+### 4.4 Function-Hooking DLL (Chapter 2)
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Injection** | KAPC injection from driver image-load callback. |
+| **Technique** | Inline trampoline hooks on ntdll.dll exports. |
+| **Hooked functions** | NtAllocateVirtualMemory, NtProtectVirtualMemory, NtWriteVirtualMemory, NtReadVirtualMemory, NtCreateThreadEx, NtMapViewOfSection, NtUnmapViewOfSection, NtQueueApcThread, NtCreateSection, NtOpenProcess, NtSuspendThread, NtResumeThread. |
+| **Telemetry** | Function name, parameters, calling module, return address, stack hash. |
+| **Detection targets** | Injection chains. RWX allocations. RW→RX protection changes. |
+| **Test evasions** | Direct syscalls. SSN resolution (Hell's/Halo's Gate). ntdll remapping. Unhooking. |
+
+### 4.5 ETW Consumer (Chapter 8)
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Providers** | Kernel-Process, DotNETRuntime, PowerShell, AMSI, DNS-Client, Security-Kerberos, RPC, Services. |
+| **Implementation** | Real-time trace session. Callback-driven parsing per provider. |
+| **Detection targets** | .NET assembly loads. PowerShell script blocks. DNS queries. Kerberoasting. Service install. |
+| **Test evasions** | ETW patching. Trace session tampering. Provider disabling. Reflection-based .NET loading. |
+
+### 4.6 Scanner Engine (Chapter 9)
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Models** | On-access (minifilter trigger), on-demand (CLI/scheduled), memory (detection engine trigger). |
+| **Engine** | libyara static library. Hot-reload. SHA-256 hash lookup. PE metadata extraction. |
+| **Memory scanning** | NtReadVirtualMemory on executable regions. Detect unbacked executable memory. |
+| **Test evasions** | Signature mutation. XOR obfuscation. PE header stomping. Non-image-backed execution. |
+
+### 4.7 AMSI Provider (Chapter 10)
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Implementation** | COM IAntimalwareProvider. Receives scans from PowerShell, .NET, VBScript, JScript, VBA, WSH. |
+| **Scan logic** | Pattern matching + YARA on content buffers. |
+| **Detection targets** | Obfuscated PowerShell. In-memory .NET loading. VBA macros. AMSI bypass attempts. |
+| **Test evasions** | String obfuscation. AmsiScanBuffer patching. Patchless bypass. amsiInitFailed overwrite. |
+
+## 5. Integration Test Plan (Chapter 13 Attack Chain)
+
+| Phase | Attack Action | Expected Sensor Response |
+|-------|--------------|------------------------|
+| Initial Access | XLL delivered + opened | Minifilter: .xll write. Scanner: on-access. Process callback: excel.exe + XLL cmdline. |
+| Execution | Shellcode runner: alloc→copy→protect→thread | Hook DLL: NtAlloc/NtProtect/NtCreateThread. Sequence rule fires. |
+| C2 | HTTPS beacon | Network filter: outbound 443. DNS ETW: C2 domain. |
+| Persistence | Preview handler COM reg + DLL drop | Registry callback: COM key. Minifilter: DLL write. Image-load: unsigned DLL in explorer. |
+| Recon | Seatbelt (.NET) reflective load | ETW .NET: assembly load. AMSI: content scan. |
+| Priv Escalation | File handler hijack | Object callback: privileged handle. Process callback: elevated child. |
+| Lateral Movement | SMB enum + file copy | Network filter: port 445. ETW RPC. Process callback: net.exe. |
+| Exfiltration | File copy over C2 | Network filter: large outbound. Minifilter: target file reads. Sequence: read + network. |
+
+## 6. Feature Priority Matrix
+
+| Feature | Priority | Phase | Notes |
+|---------|----------|-------|-------|
+| Process creation callbacks | P0 — Critical | Phase 1 | Foundation of all process-level detection |
+| Thread creation callbacks | P0 — Critical | Phase 1 | Remote thread injection detection |
+| Image-load + KAPC injection | P0 — Critical | Phase 2 | Inject hooking DLL |
+| ntdll function hooking DLL | P0 — Critical | Phase 3 | Primary userland telemetry |
+| YARA file scanner | P0 — Critical | Phase 8 | Static detection baseline |
+| Agent service + IPC | P0 — Critical | Phase 4 | Telemetry backbone |
+| Object handle callbacks | P1 — High | Phase 2 | Credential dump detection |
+| Registry callbacks | P1 — High | Phase 2 | Persistence detection |
+| Filesystem minifilter | P1 — High | Phase 5 | File + named pipe detection |
+| WFP network filter | P1 — High | Phase 6 | C2 + lateral movement |
+| ETW consumer (8 providers) | P1 — High | Phase 7 | .NET/PS/DNS/Kerberos/RPC |
+| AMSI provider | P1 — High | Phase 7 | Script-level detection |
+| Memory scanner | P1 — High | Phase 8 | Unbacked executable detection |
+| Sequence rules | P1 — High | Phase 4 | Behavioral chains |
+| Git-based signature updates | P1 — High | Phase 9 | Rule distribution |
+| Self-protection | P2 — Medium | Phase 11 | Sensor blinding detection |
+| Direct syscall detection | P2 — Medium | Phase 11 | ntdll bypass detection |
+| Telemetry cross-validation | P2 — Medium | Phase 11 | Redundancy |
+| Remote management server | P3 — Low | v2 | See v2 Roadmap |
+| RPC filters | P3 — Low | v2+ | DCSync/PetitPotam |
+| Nirvana hooks | P3 — Low | v2+ | Syscall return interception |
+| Hypervisor | P3 — Low | v2+ | Anti-exploit/ransomware |
+
+## 7. Build & Development Environment
+
+### 7.1 Toolchain
+
+- **Compiler:** MSVC (VS 2022) + WDK for kernel components.
+- **Build system:** CMake with WDK integration.
+- **Language:** C17 for driver, C++20 for agent/CLI.
+- **Analysis:** MSVC /analyze, Driver Verifier, SDV.
+- **Debugging:** WinDbg (kdnet) for kernel, VS debugger for user-mode.
+
+### 7.2 Test Environment
+
+- **Target VMs:** Windows 10 22H2 + Windows 11 23H2 (x64), test-signing enabled.
+- **Kernel debugging:** Two-VM setup, WinDbg host via kdnet.
+- **Attack tooling:** Custom XLL (Ch. 13), Cobalt Strike/Sliver, Seatbelt, Rubeus, Mimikatz, SharpHound.
+- **Telemetry sink:** ELK stack or JSON file sink for v1.
+
+### 7.3 Repository Structure
+
+`sentinel-drv/` (kernel driver) · `sentinel-hook/` (hooking DLL) · `sentinel-agent/` (agent service) · `sentinel-cli/` (CLI) · `common/` (shared headers) · `rules/` (YAML, Git-managed) · `yara-rules/` (YARA, Git-managed) · `tests/` (integration tests) · `scripts/` (build/install helpers) · `docs/` (architecture + API docs)
+
+## 8. Risks & Mitigations
+
+| Risk | Severity | Mitigation |
+|------|----------|------------|
+| Kernel bugs → BSOD | High | Driver Verifier, pool tagging, IRQL discipline, incremental per-callback testing. |
+| Test-signing limits applicability | Medium | Acceptable for v1. EV signing for v2+. |
+| Sensor performance overhead | Medium | Async processing, worker threads for hashing, configurable granularity. |
+| KAPC fails on protected processes | Medium | Exclude PPL. Use callbacks + ETW for visibility. |
+| Evasions evolve faster than rules | Low | By design — training platform, not commercial product. |
+| No EtwTi without ELAM | Low | Standard ETW covers significant telemetry. ELAM deferred to v2. |
+
+## 9. References
+
+- Hand, Matt. *Evading EDR.* No Starch Press, 2023.
+- Microsoft WDK docs · Win32 API docs · Elastic Detection Rules · YARA docs · MITRE ATT&CK
+- Johnson, Jonathan. "Evadere Classifications." SpecterOps, 2021.
+- Atkinson, Jared. "Funnel of Fidelity." SpecterOps.
+- Open-source: emryll/EDR, 0xrawsec/whids, wavestone-cdt/EDRSandblast.
+
+---
+
+# PART II: IMPLEMENTATION PHASES
+
+## 10. How To Use Part II With Claude Code
+
+Part II breaks Part I's requirements into 49 discrete tasks across 12 phases, each sized for a single Claude Code session.
+
+### Workflow
+
+1. Open a Claude Code session and provide the task ID (e.g., "Implement task P1-T3") with this document as context.
+2. Claude Code generates the implementation. Review against acceptance criteria.
+3. Build/test. If criteria pass, commit and move to next task.
+4. If a task fails, stay in session and refine. Tasks are dependency-ordered within each phase.
 
 ### Complexity Ratings
 
-- **S (Small):** Single-file scaffolding, headers, configs. Typically <200 lines. One session.
-- **M (Medium):** Single component with moderate logic. 200–600 lines. One session, possibly two.
-- **L (Large):** Multi-file component with kernel/user interaction, IPC, or complex logic. 500–1500 lines. May need 2–3 sessions.
-- **XL (Extra Large):** Full subsystem with cross-component integration. Break into sub-tasks within the session. 2–4 sessions.
+- **S (Small):** <200 lines, one session. Headers, configs, scripts.
+- **M (Medium):** 200–600 lines, one session. Single component with moderate logic.
+- **L (Large):** 500–1500 lines, 2–3 sessions. Multi-file, kernel/user interaction, IPC.
+- **XL (Extra Large):** Cross-component integration, 2–4 sessions.
 
-### Session Context Tips
+### Session Tips
 
-- At the start of each session, paste the relevant phase section from this doc (or the full doc if within context limits).
-- Reference the repo structure and `common/` headers so Claude Code knows where types and IPC definitions live.
-- For kernel-mode tasks, remind Claude Code of WDK constraints: C17, no C++ exceptions, no STL, IRQL discipline.
-- For tasks that depend on prior tasks, ensure the prior output is committed and referenceable in the working tree.
-
----
-
-## Repository Structure
-
-All phases build into this monorepo layout. Phase 0 scaffolds it; subsequent phases populate the directories.
-
-| Path | Purpose |
-|------|---------|
-| `CMakeLists.txt` | Top-level CMake. Detects WDK, builds all sub-projects. |
-| `common/` | Shared headers: telemetry event structs, IPC protocol, error codes, constants. |
-| `common/telemetry.h` | Event envelope struct + per-sensor payload unions. Used by every component. |
-| `common/ipc.h` | Named pipe protocol constants, message framing, serialization helpers. |
-| `common/constants.h` | Pipe names, driver device names, IOCTL codes, version string. |
-| `sentinel-drv/` | Kernel-mode driver (WDM). Callbacks, minifilter, WFP callout. |
-| `sentinel-drv/CMakeLists.txt` | WDK build config for `.sys` output. |
-| `sentinel-hook/` | User-mode hooking DLL. Inline trampoline hooks on ntdll. |
-| `sentinel-agent/` | User-mode service. ETW consumer, AMSI provider, scanner, rule engine. |
-| `sentinel-cli/` | Console management tool. |
-| `rules/` | YAML detection rule definitions. |
-| `yara-rules/` | YARA rule files for file and memory scanning. |
-| `tests/` | Integration test harness + Ch. 13 attack chain automation. |
-| `scripts/` | Build helpers, driver install/uninstall, test-signing setup. |
-| `docs/` | Architecture diagrams, API docs, this requirements doc. |
+- Paste the relevant phase section at session start.
+- Reference `common/` headers so Claude Code knows where types live.
+- For kernel tasks: remind of WDK constraints (C17, no exceptions, no STL, IRQL discipline).
+- Ensure prior task output is committed before starting dependent tasks.
 
 ---
 
 ## Phase 0: Project Scaffolding
 
-**Goal:** Establish the monorepo, build system, shared headers, and IPC protocol so all subsequent phases have a stable foundation to build on.
+**Goal:** Monorepo, build system, shared headers, IPC protocol. **Book:** Ch. 1.
 
-**Book reference:** Chapter 1 (EDR-chitecture) — component overview, telemetry model, agent design tiers.
-
-### P0-T1 — Initialize Monorepo `[S]`
-
-**Task:** Initialize monorepo with directory structure, top-level `CMakeLists.txt`, `.gitignore`, `README.md`, `LICENSE`. CMake must detect WDK and configure kernel vs. user-mode sub-projects.
-
-**Files:** `CMakeLists.txt`, `.gitignore`, `README.md`, all subdirectory `CMakeLists.txt` stubs
-
-**Acceptance Criteria:** `cmake -B build` succeeds with WDK detected. Each sub-project stub compiles (empty `main`/`DriverEntry`).
-
-### P0-T2 — Shared Telemetry Schema `[M]`
-
-**Task:** Define the shared telemetry event envelope and per-sensor payload structures in `common/telemetry.h`. This is the canonical event schema used by every component. Include: `event_id` (GUID), `timestamp` (LARGE_INTEGER), source enum, process context struct, and a tagged union for sensor-specific payloads.
-
-**Files:** `common/telemetry.h`
-
-**Acceptance Criteria:** Header compiles in both kernel-mode (C17, WDK) and user-mode (C++20) contexts without errors. All event types from Chapters 2–12 have a payload variant.
-
-### P0-T3 — IPC Protocol `[M]`
-
-**Task:** Define IPC protocol in `common/ipc.h`. Named pipe `\\.\pipe\SentinelTelemetry` for user-mode components. Filter communication port (`FltCreateCommunicationPort`) protocol for driver→agent. Message framing: 4-byte length prefix + serialized event. Include connect/disconnect handshake.
-
-**Files:** `common/ipc.h`, `common/ipc_serialize.h`
-
-**Acceptance Criteria:** Header compiles in both modes. Serialization round-trips a test event correctly (unit test in `tests/`).
-
-### P0-T4 — Constants `[S]`
-
-**Task:** Define constants in `common/constants.h`: device name (`\Device\SentinelDrv`), symbolic link, pipe names, IOCTL codes for CLI→agent commands (status, scan, rule reload), driver version, minifilter altitude (320000 range), WFP sublayer/callout GUIDs.
-
-**Files:** `common/constants.h`
-
-**Acceptance Criteria:** No magic numbers in any subsequent phase code — everything references `constants.h`.
-
-### P0-T5 — Install Scripts `[S]`
-
-**Task:** Create driver install/uninstall scripts. PowerShell scripts for: enabling test-signing (`bcdedit`), creating the driver service (`sc create`), starting/stopping, and kdnet setup instructions.
-
-**Files:** `scripts/install-driver.ps1`, `scripts/uninstall-driver.ps1`, `scripts/setup-testsigning.ps1`
-
-**Acceptance Criteria:** Scripts run without error on a clean Win10/11 x64 VM. Driver service appears in `sc query` output.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P0-T1 | Init monorepo: CMakeLists.txt, .gitignore, README, LICENSE. CMake detects WDK. | Top-level + subdirectory CMakeLists.txt stubs | `cmake -B build` succeeds. Stubs compile. | S |
+| P0-T2 | Shared telemetry schema: event_id, timestamp, source enum, process context, tagged payload union. | `common/telemetry.h` | Compiles in kernel (C17) and user (C++20) mode. All Ch. 2–12 event types covered. | M |
+| P0-T3 | IPC protocol: named pipe + filter port framing. 4-byte length prefix. Handshake. | `common/ipc.h`, `common/ipc_serialize.h` | Compiles both modes. Serialization round-trips correctly. | M |
+| P0-T4 | Constants: device name, pipe names, IOCTLs, altitude, WFP GUIDs. | `common/constants.h` | No magic numbers in subsequent code. | S |
+| P0-T5 | Driver install/uninstall PowerShell scripts + test-signing setup. | `scripts/*.ps1` | Run clean on Win10/11 x64 VM. | S |
 
 ---
 
 ## Phase 1: Kernel Driver — Process & Thread Callbacks
 
-**Goal:** Build the kernel driver skeleton and implement the first two callback types: process creation/termination and thread creation/termination. This is the foundation of all kernel-level telemetry.
+**Goal:** Driver skeleton + process/thread callbacks. **Book:** Ch. 3.
 
-**Book reference:** Chapter 3 (Process- and Thread-Creation Notifications).
-
-### P1-T1 — Driver Skeleton & Communication Port `[M]`
-
-**Task:** Implement `DriverEntry` and `DriverUnload`. Create device object, symbolic link. Register and clean up filter communication port (`FltCreateCommunicationPort`) for sending telemetry to the agent. Implement port connect/disconnect callbacks.
-
-**Files:** `sentinel-drv/main.c`, `sentinel-drv/comms.c`, `sentinel-drv/comms.h`
-
-**Acceptance Criteria:** Driver loads and unloads cleanly (no BSOD, no leaks under Driver Verifier). Communication port is created and visible to user-mode.
-
-### P1-T2 — Process Creation Callback `[L]`
-
-**Task:** Register process-creation callback via `PsSetCreateProcessNotifyRoutineEx`. In the callback, populate a `SENTINEL_EVENT` with: image path, command line (from PEB), PID, PPID, creating thread ID, token info (user SID, integrity level via `SeQueryInformationToken`), and PE metadata. Send event over filter communication port.
-
-**Files:** `sentinel-drv/callbacks_process.c`, `sentinel-drv/callbacks_process.h`
-
-**Acceptance Criteria:** When `notepad.exe` is launched, a correctly populated process-create event is received by a test consumer on the filter port. All fields are non-null. Event arrives within <50ms of process start.
-
-### P1-T3 — Thread Creation Callback `[M]`
-
-**Task:** Register thread-creation callback via `PsSetCreateThreadNotifyRoutineEx`. Populate event with: TID, start address, owning PID, creating PID/TID. Flag remote thread creation (creating PID != owning PID).
-
-**Files:** `sentinel-drv/callbacks_thread.c`, `sentinel-drv/callbacks_thread.h`
-
-**Acceptance Criteria:** Launching a process generates both process-create and thread-create events. A remote thread injection (test with `CreateRemoteThread`) is flagged with `remote=true`.
-
-### P1-T4 — Test Consumer `[M]`
-
-**Task:** Build a minimal user-mode test consumer that connects to the filter communication port, receives events, deserializes them, and prints JSON to stdout. This is a throwaway diagnostic tool but validates the entire driver→user-mode pipeline.
-
-**Files:** `tests/test_consumer.c`
-
-**Acceptance Criteria:** Run `test_consumer.exe`, launch processes, see JSON events stream to console. Ctrl+C disconnects cleanly.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P1-T1 | DriverEntry/Unload, device object, filter communication port. | `sentinel-drv/main.c`, `comms.c`, `comms.h` | Load/unload clean. Port visible to user-mode. | M |
+| P1-T2 | Process creation callback (PsSetCreateProcessNotifyRoutineEx). Full event: image, cmdline, PID, PPID, token, PE metadata. | `callbacks_process.c/.h` | notepad.exe → event on port. All fields non-null. <50ms. | L |
+| P1-T3 | Thread creation callback. Remote thread flagging. | `callbacks_thread.c/.h` | Process + thread events. CreateRemoteThread → remote=true. | M |
+| P1-T4 | Test consumer: connect to filter port, print JSON to stdout. | `tests/test_consumer.c` | JSON stream on process launch. Clean disconnect. | M |
 
 ---
 
-## Phase 2: Kernel Driver — Object, Image-Load, and Registry Callbacks
+## Phase 2: Object, Image-Load, Registry Callbacks
 
-**Goal:** Complete the kernel callback suite: object handle notifications, image-load notifications (including the KAPC injection infrastructure), and registry notifications.
+**Goal:** Complete kernel callback suite + KAPC injection. **Book:** Ch. 4–5.
 
-**Book reference:** Chapters 4 (Object Notifications), 5 (Image-Load and Registry Notifications).
-
-### P2-T1 — Object Handle Callbacks `[L]`
-
-**Task:** Register object callbacks via `ObRegisterCallbacks`. Monitor `OB_OPERATION_HANDLE_CREATE` and `OB_OPERATION_HANDLE_DUPLICATE` for Process and Thread types. Emit event with: source PID/TID, target PID, requested access mask, granted access mask, operation type. Configure a list of protected process names (`lsass.exe`, `csrss.exe`) to watch.
-
-**Files:** `sentinel-drv/callbacks_object.c`, `sentinel-drv/callbacks_object.h`
-
-**Acceptance Criteria:** Opening a handle to `lsass.exe` with `PROCESS_VM_READ` generates an object-notification event. Normal handle operations to non-protected processes are filtered out (no event flood).
-
-### P2-T2 — Image-Load Callback `[L]`
-
-**Task:** Register image-load callback via `PsSetLoadImageNotifyRoutineEx`. Emit event with: full image path, base address, image size, PID, and signing status (via CI functions or `SeValidateImageHeader`). Populate a per-process loaded-module list in a driver-managed hash table.
-
-**Files:** `sentinel-drv/callbacks_imageload.c`, `sentinel-drv/callbacks_imageload.h`, `sentinel-drv/process_table.c`
-
-**Acceptance Criteria:** Loading a DLL (e.g., `rundll32` with a test DLL) generates an image-load event with correct path and signature status. Unsigned DLLs are flagged.
-
-### P2-T3 — KAPC Injection `[XL]`
-
-**Task:** Implement KAPC injection infrastructure triggered by image-load callback. When a new process loads `ntdll.dll`, resolve `LdrLoadDll` address from the mapped ntdll, allocate user-mode memory for the APC routine, initialize KAPC structure, and queue it to load `sentinel-hook.dll`. Include a configurable exclusion list (don't inject into system-critical processes).
-
-**Files:** `sentinel-drv/kapc_inject.c`, `sentinel-drv/kapc_inject.h`
-
-**Acceptance Criteria:** A newly spawned user-mode process (e.g., `notepad.exe`) has `sentinel-hook.dll` loaded in its module list (visible in Process Explorer or `!peb` in WinDbg). Injection does not occur for excluded processes.
-
-### P2-T4 — Registry Callback `[L]`
-
-**Task:** Register registry callback via `CmRegisterCallbackEx`. Monitor key create/open, value set/delete, key rename. Emit event with: operation type, full key path, value name, data type, data content (truncated at 4KB). Implement altitude-based filtering to reduce noise (ignore `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer` frequent writes).
-
-**Files:** `sentinel-drv/callbacks_registry.c`, `sentinel-drv/callbacks_registry.h`
-
-**Acceptance Criteria:** Creating a Run key persistence entry generates a registry event. High-frequency Explorer registry chatter is filtered out. No measurable performance degradation during normal use.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P2-T1 | Object callbacks (ObRegisterCallbacks). Protected process list. | `callbacks_object.c/.h` | lsass handle open → event. Non-protected filtered. | L |
+| P2-T2 | Image-load callback. Signing status. Per-process module table. | `callbacks_imageload.c/.h`, `process_table.c` | DLL load → event with path + sig status. Unsigned flagged. | L |
+| P2-T3 | KAPC injection on ntdll load. Resolve LdrLoadDll, queue APC to load sentinel-hook.dll. Exclusion list. | `kapc_inject.c/.h` | New process has sentinel-hook.dll loaded. Excluded processes skipped. | XL |
+| P2-T4 | Registry callback (CmRegisterCallbackEx). Noise filtering. | `callbacks_registry.c/.h` | Run key → event. Explorer chatter filtered. No perf hit. | L |
 
 ---
 
 ## Phase 3: Function-Hooking DLL
 
-**Goal:** Build the user-mode DLL that gets injected via KAPC (Phase 2) and hooks ntdll functions to capture userland API call telemetry.
+**Goal:** Userland hooking DLL for ntdll API telemetry. **Book:** Ch. 2.
 
-**Book reference:** Chapter 2 (Function-Hooking DLLs).
-
-### P3-T1 — DLL Skeleton & Hook Engine `[L]`
-
-**Task:** Create the DLL skeleton with `DllMain` handling `DLL_PROCESS_ATTACH` (install hooks) and `DLL_PROCESS_DETACH` (remove hooks). Implement a hook installation framework: given a function name and module, patch the first bytes with a JMP to our detour, save original bytes in a trampoline. Use a custom mini-Detours implementation (not the full MS Detours library) for educational value.
-
-**Files:** `sentinel-hook/main.c`, `sentinel-hook/hook_engine.c`, `sentinel-hook/hook_engine.h`
-
-**Acceptance Criteria:** DLL loads into a test process (manual `LoadLibrary`). `hook_engine` correctly patches and restores a test function (e.g., `kernel32!Sleep`). Trampoline calls the original function successfully.
-
-### P3-T2 — Core Injection-Detection Hooks `[L]`
-
-**Task:** Implement detour functions for the core injection-detection hooks: `NtAllocateVirtualMemory`, `NtProtectVirtualMemory`, `NtWriteVirtualMemory`, `NtCreateThreadEx`, `NtMapViewOfSection`, `NtQueueApcThread`. Each detour logs: function name, all parameters, calling module (via return address → module lookup), and return value. Events are sent to the agent over the named pipe.
-
-**Files:** `sentinel-hook/hooks_memory.c`, `sentinel-hook/hooks_thread.c`, `sentinel-hook/hooks_section.c`
-
-**Acceptance Criteria:** A test program that calls `VirtualAllocEx` + `WriteProcessMemory` + `CreateRemoteThread` generates three hook events with correct parameter values on the named pipe.
-
-### P3-T3 — Remaining Hooks & Stack Hash `[M]`
-
-**Task:** Implement remaining hooks: `NtReadVirtualMemory`, `NtOpenProcess`, `NtSuspendThread`, `NtResumeThread`, `NtUnmapViewOfSection`, `NtCreateSection`. Add stack hash computation (hash of return addresses on the call stack) to each event for behavioral correlation.
-
-**Files:** `sentinel-hook/hooks_process.c`, `sentinel-hook/hooks_section.c` (extend)
-
-**Acceptance Criteria:** All 12 hooked functions emit events. Stack hash is consistent for the same call path and different for different paths.
-
-### P3-T4 — Named Pipe Client `[M]`
-
-**Task:** Implement the named pipe client in the DLL. Connect to `\\.\pipe\SentinelTelemetry` on `DLL_PROCESS_ATTACH`. Buffer events if pipe is unavailable (ring buffer, 1000 events max). Reconnect on pipe drop. Serialize events using the `common/ipc` format.
-
-**Files:** `sentinel-hook/pipe_client.c`, `sentinel-hook/pipe_client.h`
-
-**Acceptance Criteria:** DLL sends events even if the agent starts after the hooked process. Buffer drains when pipe becomes available. No crash or hang if pipe is permanently unavailable.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P3-T1 | DLL skeleton + custom hook engine (JMP patch + trampoline). | `main.c`, `hook_engine.c/.h` | LoadLibrary → hooks installed. Trampoline works. | L |
+| P3-T2 | Core hooks: NtAlloc/NtProtect/NtWrite/NtCreateThread/NtMapView/NtQueueApc. Params + calling module logged. | `hooks_memory.c`, `hooks_thread.c`, `hooks_section.c` | AllocEx+WriteMem+CreateRemoteThread → 3 events with correct params. | L |
+| P3-T3 | Remaining hooks (6 functions) + stack hash. | `hooks_process.c`, `hooks_section.c` | All 12 emit events. Stack hash deterministic per call path. | M |
+| P3-T4 | Named pipe client. Ring buffer (1000). Reconnect. | `pipe_client.c/.h` | Events buffered if agent late. Drain on connect. No crash if pipe absent. | M |
 
 ---
 
 ## Phase 4: Agent Service — Core
 
-**Goal:** Build the agent service that aggregates telemetry from the driver and hooking DLL, and implements the basic detection rule engine.
+**Goal:** Telemetry aggregation + detection rule engine. **Book:** Ch. 1.
 
-**Book reference:** Chapter 1 (detection logic, brittle vs. robust detections, Elastic rule model).
-
-### P4-T1 — Service Skeleton & Pipeline `[L]`
-
-**Task:** Create the agent as a Windows service (`SERVICE_WIN32_OWN_PROCESS`). Implement service control handler (start, stop, pause). On start: connect to driver filter communication port, create named pipe server for hook DLL connections, initialize event processing pipeline (multi-threaded: receiver threads → shared queue → processing thread).
-
-**Files:** `sentinel-agent/main.cpp`, `sentinel-agent/service.cpp`, `sentinel-agent/pipeline.cpp`, `sentinel-agent/pipeline.h`
-
-**Acceptance Criteria:** Service installs and starts via `sc create` / `sc start`. Connects to driver port. Named pipe server accepts connections. Events from both sources appear in the processing queue.
-
-### P4-T2 — Event Processing & JSON Logging `[M]`
-
-**Task:** Implement the event processing pipeline. Deserialize events from both sources into the common `SENTINEL_EVENT` struct. Enrich events with process context (maintain a process table with PID → image path, command line, user, parent, integrity level). Write all events to a JSON-lines log file (configurable path).
-
-**Files:** `sentinel-agent/event_processor.cpp`, `sentinel-agent/process_table.cpp`, `sentinel-agent/json_writer.cpp`
-
-**Acceptance Criteria:** Launch processes, inject DLLs, open handles — all events appear in the JSON log with correct process context enrichment. Log file rotates at 100MB.
-
-### P4-T3 — Single-Event Rule Engine `[L]`
-
-**Task:** Implement the single-event rule engine. Parse YAML rule files at startup. Each rule specifies: source filter, field conditions (equals, contains, regex, greater-than), severity, action (LOG/BLOCK). Evaluate each incoming event against all matching rules. Emit alert events (separate log + future dashboard hook).
-
-**Files:** `sentinel-agent/rules/rule_engine.cpp`, `sentinel-agent/rules/rule_parser.cpp`, `sentinel-agent/rules/rule_types.h`
-
-**Acceptance Criteria:** A YAML rule matching "process_create where image_path contains cmd.exe and parent_image contains excel.exe" fires an alert when that parent-child relationship occurs. Non-matching events pass through without alert.
-
-### P4-T4 — Sequence Rule Engine `[XL]`
-
-**Task:** Implement sequence rule evaluation. Maintain a sliding time-window state machine per process. Rules define ordered event sequences with a time constraint (e.g., `alloc(RW)` → `protect(RX)` → `create_thread` within 5s from same PID). On complete match, fire alert.
-
-**Files:** `sentinel-agent/rules/sequence_engine.cpp`
-
-**Acceptance Criteria:** The Ch. 13 shellcode runner pattern (`VirtualAlloc` → `VirtualProtect(RX)` → `CreateThread`) fires a sequence alert. Partial matches that exceed the time window are discarded.
-
-### P4-T5 — Threshold Rule Engine `[M]`
-
-**Task:** Implement threshold rules. Count events matching a filter within a sliding window. Fire alert when threshold exceeded. Example: >3 handle requests to `lsass.exe` with `PROCESS_VM_READ` within 30s.
-
-**Files:** `sentinel-agent/rules/threshold_engine.cpp`
-
-**Acceptance Criteria:** Rapidly opening handles to `lsass.exe` fires a threshold alert. Slow operations below threshold do not fire.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P4-T1 | Windows service. Filter port client + pipe server. Event pipeline (receivers → queue → processor). | `main.cpp`, `service.cpp`, `pipeline.cpp/.h` | sc start works. Both sources feed queue. | L |
+| P4-T2 | Event processing: deserialize, enrich (process table), JSON-lines log (100MB rotation). | `event_processor.cpp`, `process_table.cpp`, `json_writer.cpp` | Events in log with correct enrichment. Rotation works. | M |
+| P4-T3 | Single-event rule engine. YAML parsing. Conditions: equals/contains/regex/gt. Actions: LOG/BLOCK. | `rules/rule_engine.cpp`, `rule_parser.cpp`, `rule_types.h` | "cmd.exe child of excel.exe" rule fires correctly. | L |
+| P4-T4 | Sequence rules. Per-PID sliding window state machine. | `rules/sequence_engine.cpp` | Alloc→Protect(RX)→Thread chain fires. Expired partials discarded. | XL |
+| P4-T5 | Threshold rules. Sliding window count. | `rules/threshold_engine.cpp` | Rapid lsass handle opens → alert. Slow → no alert. | M |
 
 ---
 
 ## Phase 5: Filesystem Minifilter
 
-**Goal:** Add the minifilter component to the kernel driver for filesystem I/O monitoring, file scanning triggers, and named pipe detection.
+**Goal:** File I/O monitoring, scanning triggers, named pipes. **Book:** Ch. 6.
 
-**Book reference:** Chapter 6 (Filesystem Minifilter Drivers).
-
-### P5-T1 — Minifilter Registration & I/O Callbacks `[L]`
-
-**Task:** Register the minifilter with `FltRegisterFilter`. Define altitude in the FSFilter Anti-Virus range (320000–329998). Register pre- and post-operation callbacks for: `IRP_MJ_CREATE`, `IRP_MJ_WRITE`, `IRP_MJ_SET_INFORMATION` (rename/delete). Implement `FLT_PREOP_SUCCESS_WITH_CALLBACK` / `FLT_PREOP_SUCCESS_NO_CALLBACK` filtering to skip excluded paths (`Windows\`, `Program Files\`, etc.).
-
-**Files:** `sentinel-drv/minifilter.c`, `sentinel-drv/minifilter.h`
-
-**Acceptance Criteria:** `fltmc` shows the minifilter loaded at the correct altitude. Creating/writing/deleting files in non-excluded paths generates events. System directories are excluded (no event flood).
-
-### P5-T2 — File Hashing `[L]`
-
-**Task:** In the post-create callback, compute SHA-256 hash of new/modified files asynchronously (work item queue to avoid blocking the I/O path). Emit file event with: path, operation, requesting PID, hash, file size. Cap hash computation at 50MB files.
-
-**Files:** `sentinel-drv/file_hash.c`, `sentinel-drv/file_hash.h`
-
-**Acceptance Criteria:** Dropping a test `.exe` to disk generates a file event with correct SHA-256 hash. Files >50MB emit events with `hash="skipped"`. No noticeable I/O latency on normal file operations.
-
-### P5-T3 — Named Pipe Monitoring `[M]`
-
-**Task:** Add named pipe monitoring via `IRP_MJ_CREATE_NAMED_PIPE`. Emit event with pipe name, creating PID, access mode. Build a list of suspicious default pipe names (Cobalt Strike defaults: `\MSSE-*`, `\msagent_*`, `\postex_*`, etc.).
-
-**Files:** `sentinel-drv/minifilter_pipes.c`
-
-**Acceptance Criteria:** Creating a named pipe with a Cobalt Strike default name generates an alert-priority event. Normal named pipe creation (e.g., from Chrome) generates a low-priority event.
-
-### P5-T4 — YARA Rules `[S]`
-
-**Task:** Write 3–5 YARA rules for common malware indicators: XLL files with shellcode patterns, UPX-packed PEs, Cobalt Strike beacon config patterns, Mimikatz string patterns. Place in `yara-rules/` directory.
-
-**Files:** `yara-rules/*.yar`
-
-**Acceptance Criteria:** YARA rules compile without errors. Manual `yara` scan against known-bad samples matches correctly.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P5-T1 | Minifilter registration. Anti-Virus altitude. Pre/post-op for CREATE/WRITE/SET_INFO. Path exclusions. | `minifilter.c/.h` | fltmc shows correct altitude. Events for non-excluded paths. System dirs excluded. | L |
+| P5-T2 | Async SHA-256 hash (work item queue). File event emission. 50MB cap. | `file_hash.c/.h` | .exe drop → event + correct hash. >50MB → "skipped". No I/O latency. | L |
+| P5-T3 | Named pipe monitoring (IRP_MJ_CREATE_NAMED_PIPE). Suspicious pipe list. | `minifilter_pipes.c` | CS default pipe → alert. Normal pipe → low-priority. | M |
+| P5-T4 | 3–5 YARA rules: XLL shellcode, UPX, CS beacon, Mimikatz. | `yara-rules/*.yar` | Compile clean. Match known-bad samples. | S |
 
 ---
 
 ## Phase 6: Network Filter (WFP Callout)
 
-**Goal:** Add the WFP callout driver for network traffic monitoring, enabling C2 beaconing detection and lateral movement visibility.
+**Goal:** Network monitoring for C2 + lateral movement. **Book:** Ch. 7.
 
-**Book reference:** Chapter 7 (Network Filter Drivers).
-
-### P6-T1 — WFP Callout Registration `[L]`
-
-**Task:** Implement WFP callout registration: open filter engine session (`FwpmEngineOpen`), register callouts (`FwpsCalloutRegister`), add callouts to engine (`FwpmCalloutAdd`), create sublayer, add filter objects. Target layers: `FWPM_LAYER_ALE_AUTH_CONNECT_V4` (outbound), `FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4` (inbound).
-
-**Files:** `sentinel-drv/wfp_callout.c`, `sentinel-drv/wfp_callout.h`
-
-**Acceptance Criteria:** WFP callout is registered (visible via `netsh wfp show state`). No network disruption on the test VM.
-
-### P6-T2 — Network Event Classification `[M]`
-
-**Task:** In the classify callback, extract: local/remote IP, local/remote port, protocol, PID (from `FWPS_METADATA_FIELD_PROCESS_ID`), direction. Emit network event over filter communication port. Implement rate limiting (max 100 events/sec per PID) to prevent flood from chatty processes.
-
-**Files:** `sentinel-drv/wfp_classify.c`
-
-**Acceptance Criteria:** Opening a browser generates network events with correct IP/port/PID. Rate limiting caps events from a single process. DNS and HTTPS connections are captured.
-
-### P6-T3 — Connection Table `[M]`
-
-**Task:** Maintain a connection table in the agent (not the driver) that tracks: PID, remote IP, remote port, connection count, first-seen, last-seen, total bytes. Expose via CLI query. This enables beaconing detection in Phase 8.
-
-**Files:** `sentinel-agent/network_table.cpp`, `sentinel-agent/network_table.h`
-
-**Acceptance Criteria:** After browsing several sites, `sentinel-cli connections` shows a table of active connections with correct metadata.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P6-T1 | WFP callout registration. Outbound + inbound ALE layers. | `wfp_callout.c/.h` | Registered in netsh. No network disruption. | L |
+| P6-T2 | Classify callback: IP/port/protocol/PID/direction. Rate limit 100/s per PID. | `wfp_classify.c` | Browser → events. Rate limiting works. | M |
+| P6-T3 | Agent connection table: PID, remote IP/port, counts, timestamps. CLI exposure. | `network_table.cpp/.h` | `sentinel-cli connections` shows correct table. | M |
 
 ---
 
 ## Phase 7: ETW Consumer & AMSI Provider
 
-**Goal:** Add the user-mode ETW consumer and AMSI provider to the agent, covering script-level and .NET telemetry.
+**Goal:** Script-level + .NET telemetry. **Book:** Ch. 8, 10.
 
-**Book reference:** Chapter 8 (Event Tracing for Windows), Chapter 10 (Antimalware Scan Interface).
-
-### P7-T1 — ETW Consumer Framework + .NET Provider `[L]`
-
-**Task:** Implement the ETW consumer framework in the agent: create a real-time trace session (`StartTrace`), enable providers (`EnableTraceEx2`), process events in a callback (`OpenTrace`/`ProcessTrace`). Start with one provider: `Microsoft-Windows-DotNETRuntime` (for .NET assembly detection, as in the Ch. 8 case study).
-
-**Files:** `sentinel-agent/etw/etw_consumer.cpp`, `sentinel-agent/etw/etw_consumer.h`, `sentinel-agent/etw/provider_dotnet.cpp`
-
-**Acceptance Criteria:** Running a .NET assembly (e.g., Seatbelt) generates ETW events captured by the consumer with assembly name and class names visible in the event payload.
-
-### P7-T2 — Additional ETW Providers `[L]`
-
-**Task:** Add providers: `Microsoft-Windows-PowerShell` (script block logging), `Microsoft-Windows-DNS-Client` (DNS resolution), `Microsoft-Windows-Security-Kerberos` (auth events), `Microsoft-Windows-Services` (service install). Each provider gets its own parser module.
-
-**Files:** `sentinel-agent/etw/provider_powershell.cpp`, `provider_dns.cpp`, `provider_kerberos.cpp`, `provider_services.cpp`
-
-**Acceptance Criteria:** Running encoded PowerShell, performing `nslookup`, requesting a Kerberos ticket, and installing a service each generate parsed events in the telemetry log.
-
-### P7-T3 — AMSI & RPC ETW Providers `[M]`
-
-**Task:** Add providers: `Microsoft-Antimalware-Scan-Interface` (AMSI events from OS-level), `Microsoft-Windows-RPC` (RPC operations). Add `Microsoft-Windows-Kernel-Process` as a redundant telemetry source that cross-validates against driver process callbacks.
-
-**Files:** `sentinel-agent/etw/provider_amsi.cpp`, `provider_rpc.cpp`, `provider_kernelprocess.cpp`
-
-**Acceptance Criteria:** AMSI scan events appear for PowerShell execution. RPC events appear during remote operations. Kernel-Process events correlate with driver events (same PID/timestamp).
-
-### P7-T4 — Custom AMSI Provider `[XL]`
-
-**Task:** Implement custom AMSI provider (COM DLL registered via `IAntimalwareProvider`). On `AmsiScanBuffer`, evaluate content against YARA rules and a string-signature list. Return `AMSI_RESULT_DETECTED` for matches. Register provider on agent startup, unregister on shutdown.
-
-**Files:** `sentinel-agent/amsi/amsi_provider.cpp`, `sentinel-agent/amsi/amsi_provider.h`, `sentinel-agent/amsi/amsi_register.cpp`
-
-**Acceptance Criteria:** Running `Invoke-Mimikatz` (or a test string signature) in PowerShell triggers an AMSI detection from the SentinelPOC provider. Benign scripts pass through clean.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P7-T1 | ETW framework + DotNETRuntime provider. | `etw/etw_consumer.cpp/.h`, `provider_dotnet.cpp` | Seatbelt → events with assembly/class names. | L |
+| P7-T2 | Providers: PowerShell, DNS-Client, Kerberos, Services. | `provider_powershell/dns/kerberos/services.cpp` | Each generates parsed events for its scenario. | L |
+| P7-T3 | Providers: AMSI, RPC, Kernel-Process (cross-validation). | `provider_amsi/rpc/kernelprocess.cpp` | AMSI events for PS. RPC for remote. K-Process correlates with driver. | M |
+| P7-T4 | Custom AMSI provider (COM). YARA + string sigs on AmsiScanBuffer. | `amsi/amsi_provider.cpp/.h`, `amsi_register.cpp` | Invoke-Mimikatz → detection. Benign → clean. | XL |
 
 ---
 
 ## Phase 8: Scanner Engine & Memory Scanning
 
-**Goal:** Implement on-access file scanning, on-demand scanning, and memory scanning for unbacked executable regions.
+**Goal:** File + memory scanning with YARA. **Book:** Ch. 9.
 
-**Book reference:** Chapter 9 (Scanners).
-
-### P8-T1 — YARA Scanner Integration `[M]`
-
-**Task:** Integrate libyara as a static library in the agent build. Implement a scanner module that loads rules from `yara-rules/` at startup and supports hot-reload (SIGHUP or CLI command). Expose `scan_file(path)` and `scan_buffer(ptr, size)` APIs.
-
-**Files:** `sentinel-agent/scanner/yara_scanner.cpp`, `sentinel-agent/scanner/yara_scanner.h`, `CMakeLists.txt` (libyara)
-
-**Acceptance Criteria:** YARA rules from Phase 5 match against test malware samples via `scan_file()`. `scan_buffer()` matches an in-memory test pattern. Hot-reload picks up new rules without restart.
-
-### P8-T2 — On-Access Scanning `[M]`
-
-**Task:** Implement on-access scanning: when the minifilter emits a file-create/write event with a hash, the agent calls `scan_file()` on the path. If YARA matches, emit a scanner alert with rule name, file path, and match details. Implement a scan cache (hash → last result) to avoid re-scanning unchanged files.
-
-**Files:** `sentinel-agent/scanner/onaccess_scanner.cpp`
-
-**Acceptance Criteria:** Dropping a YARA-matching test file to disk triggers an on-access scan alert within 2 seconds. Dropping the same file again hits the cache (no re-scan). A benign file generates no alert.
-
-### P8-T3 — Memory Scanner `[L]`
-
-**Task:** Implement memory scanner. On trigger (from sequence rule or manual CLI), enumerate target process memory regions via `NtQueryVirtualMemory`. Identify executable regions not backed by an image file (`MEM_PRIVATE` + `PAGE_EXECUTE_*`). Read region contents via `NtReadVirtualMemory`. Scan against YARA rules.
-
-**Files:** `sentinel-agent/scanner/memory_scanner.cpp`
-
-**Acceptance Criteria:** A test process that allocates RWX memory, writes a YARA-matching pattern, and changes to RX is detected by the memory scanner. Legitimate process memory (backed by images) is not flagged.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P8-T1 | libyara static integration. scan_file + scan_buffer APIs. Hot-reload. | `scanner/yara_scanner.cpp/.h` | Rules match test samples. Hot-reload works. | M |
+| P8-T2 | On-access scanning (minifilter trigger). Scan cache. | `scanner/onaccess_scanner.cpp` | YARA match → alert <2s. Cache hit on re-drop. | M |
+| P8-T3 | Memory scanner. Unbacked executable region detection. | `scanner/memory_scanner.cpp` | RWX→RX + YARA pattern → detected. Image-backed → clean. | L |
 
 ---
 
 ## Phase 9: CLI & Operational Interface
 
-**Goal:** Build the management CLI and finalize the operational interface for interacting with the running agent.
+**Goal:** CLI, config, Git-based signature updates. **Book:** Ch. 1.
 
-**Book reference:** Chapter 1 (agent design, SOC workflow).
-
-### P9-T1 — Core CLI Commands `[M]`
-
-**Task:** Implement `sentinel-cli` with subcommands: `status` (agent health, driver loaded, sensor states), `alerts` (tail recent alerts with severity filter), `scan <path>` (trigger on-demand scan), `rules reload` (hot-reload rules). Communicate with agent over a separate named pipe for commands.
-
-**Files:** `sentinel-cli/main.cpp`, `sentinel-cli/commands/*.cpp`, `sentinel-agent/cmd_handler.cpp`
-
-**Acceptance Criteria:** Each subcommand returns expected output. `status` shows all sensors green. `alerts` streams real-time alerts. `scan` on a test file returns result within 5s. `rules reload` picks up new YAML.
-
-### P9-T2 — Inspection Commands `[M]`
-
-**Task:** Add CLI subcommands: `connections` (show network connection table from Phase 6), `processes` (list tracked processes with integrity level and loaded modules), `hooks` (show hook status per process). Format output as tables or JSON (`--json` flag).
-
-**Files:** `sentinel-cli/commands/connections.cpp`, `processes.cpp`, `hooks.cpp`
-
-**Acceptance Criteria:** `connections` shows the same data as the internal network table. `processes` lists all tracked PIDs with correct metadata. `hooks` confirms `sentinel-hook.dll` is loaded in target processes.
-
-### P9-T3 — Configuration File `[M]`
-
-**Task:** Implement agent configuration file (TOML or INI). Configurable: log path, log rotation size, sensor enable/disable flags, exclusion lists (process names for hook injection, file paths for minifilter), ETW provider enable/disable, scan cache TTL, named pipe buffer size.
-
-**Files:** `sentinel-agent/config.cpp`, `sentinel-agent/config.h`, `sentinel-agent/sentinel.conf`
-
-**Acceptance Criteria:** Disabling a sensor in config and restarting the agent actually stops that sensor's telemetry. Exclusion lists are honored.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P9-T1 | Core CLI: status, alerts, scan, rules reload. Command pipe. | `sentinel-cli/main.cpp`, `commands/*.cpp`, `sentinel-agent/cmd_handler.cpp` | All subcommands work. rules reload picks up new YAML. | M |
+| P9-T2 | Inspection: connections, processes, hooks. --json flag. | `commands/connections/processes/hooks.cpp` | Correct data. JSON output works. | M |
+| P9-T3 | Config file (TOML/INI). Sensor flags, exclusions, repo URLs. | `config.cpp/.h`, `sentinel.conf` | Disabled sensor → no telemetry. Repo URLs parse. | M |
+| P9-T4 | `rules update`: git pull + validate + hot-reload. Rollback on failure. --init for clone. | `commands/rules_update.cpp`, `rules/rule_validator.cpp` | New rule → active <10s. Bad rule → rollback. --init clones. | M |
+| P9-T5 | SIEM output writer. HTTP POST client for NDJSON batches to configurable endpoint. API key auth via `X-API-Key` header. Batch accumulation with size + time flush triggers. Spill-to-disk on SIEM unavailability. Drain on reconnect. Config in `[output.siem]` section. JSON serializer converts `SENTINEL_EVENT` to SentinelSIEM Appendix A envelope format. | `sentinel-agent/output/siem_writer.cpp`, `sentinel-agent/output/siem_writer.h`, `sentinel-agent/output/siem_serializer.cpp` | `enabled = true` → events arrive at SIEM endpoint as valid NDJSON. `enabled = false` → no HTTP calls. SIEM down → events spill to disk, no data loss. SIEM back → spill drains. Batch of 100 events sends as single POST. Invalid API key → logged error, events spilled. | L |
+ 
 
 ---
 
-## Phase 10: Integration Testing — Chapter 13 Attack Chain
+## Phase 10: Integration Testing — Ch. 13 Attack Chain
 
-**Goal:** Validate the complete system against the book's case study. Every phase of the attack should produce observable, alerted telemetry.
+**Goal:** Full system validation against the book's case study. **Book:** Ch. 13.
 
-**Book reference:** Chapter 13 (Case Study: A Detection-Aware Attack).
-
-### P10-T1 — Test XLL Payload `[M]`
-
-**Task:** Write the test XLL payload from Chapter 13 Listing 13-1: `DllMain` + `xlAutoOpen` with XOR-encoded shellcode, `VirtualAlloc(RW)`, `memcpy`, `VirtualProtect(RX)`, `CreateThread`. Use a benign shellcode (e.g., MessageBox or calc.exe launcher) for safe testing.
-
-**Files:** `tests/payloads/test_xll.cpp`
-
-**Acceptance Criteria:** XLL compiles. When opened in Excel, it executes the benign shellcode successfully.
-
-### P10-T2 — Attack Chain Automation `[L]`
-
-**Task:** Create a test automation script that executes each attack phase and validates that the expected alerts fire. Phases: (1) drop XLL to disk, (2) open XLL in Excel, (3) establish outbound connection, (4) create preview handler registry persistence, (5) run .NET assembly, (6) open handle to `lsass.exe`, (7) enumerate SMB shares, (8) read target files.
-
-**Files:** `tests/integration/attack_chain.ps1`
-
-**Acceptance Criteria:** Script runs end-to-end. Each phase produces at least one alert in the agent log. A summary report shows phase → alert mapping.
-
-### P10-T3 — Detection Rules for Attack Chain `[M]`
-
-**Task:** Write detection rules (YAML) for each attack phase: suspicious Excel child process, shellcode injection sequence, novel outbound connection from Office process, preview handler COM registration, .NET assembly load from non-standard path, lsass handle access, internal SMB enumeration, sensitive file read + network exfil sequence.
-
-**Files:** `rules/ch13_attack_chain.yaml`
-
-**Acceptance Criteria:** Each rule fires correctly during the P10-T2 test run. No false positives from normal system activity during a 30-minute baseline test.
-
-### P10-T4 — Test Report `[M]`
-
-**Task:** Generate a test report: for each sensor (driver callbacks, hooks, minifilter, WFP, ETW, AMSI, scanner), list which attack phases it contributed telemetry to and which evasions from Chapters 2–12 it is known-vulnerable to. Output as a markdown file in `docs/`.
-
-**Files:** `docs/test_report.md`, `tests/integration/report_generator.ps1`
-
-**Acceptance Criteria:** Report covers all 8 attack phases. Each sensor has at least one known-vulnerable evasion documented. Report is accurate against actual test results.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P10-T1 | Test XLL payload (Ch. 13 Listing 13-1). Benign shellcode. | `tests/payloads/test_xll.cpp` | Compiles. Executes in Excel. | M |
+| P10-T2 | Attack chain automation: 8 phases, validate alerts per phase. | `tests/integration/attack_chain.ps1` | End-to-end. ≥1 alert per phase. Summary report. | L |
+| P10-T3 | Detection rules for all 8 attack phases. | `rules/ch13_attack_chain.yaml` | Rules fire during P10-T2. No FPs in 30min baseline. | M |
+| P10-T4 | Test report: sensor coverage + known evasion vulnerabilities. | `docs/test_report.md` | All 8 phases covered. ≥1 evasion per sensor. | M |
 
 ---
 
 ## Phase 11: Hardening & Self-Protection
 
-**Goal:** Implement tamper detection and evasion-resistance features. This is the "Advanced" tier work from Chapter 1, focused on detecting the book's own evasion techniques.
+**Goal:** Tamper detection + evasion resistance ("Advanced" tier). **Book:** Ch. 2–12 evasions, Ch. 1 bypass classifications.
 
-**Book reference:** Chapters 2–12 (evasion sections), Chapter 1 (bypass classifications).
-
-### P11-T1 — Direct Syscall & ntdll Remapping Detection `[L]`
-
-**Task:** Detect direct syscalls and ntdll remapping. In the hooking DLL, validate that hooked function return addresses point into known legitimate modules (not unbacked memory). Detect multiple mappings of `ntdll.dll` in the process (sign of ntdll remapping). Alert on both.
-
-**Files:** `sentinel-hook/evasion_detect.c`
-
-**Acceptance Criteria:** A test tool using direct syscalls (e.g., SysWhispers output) triggers a "syscall from unbacked memory" alert. A test tool that remaps ntdll triggers a "duplicate ntdll mapping" alert.
-
-### P11-T2 — Hook Integrity Monitoring `[M]`
-
-**Task:** Detect hook removal. Periodically (every 5s) verify that hooks are still in place by checking the first bytes of each hooked function against the expected JMP instruction. If hooks are removed, re-install and emit a tampering alert.
-
-**Files:** `sentinel-hook/hook_integrity.c`
-
-**Acceptance Criteria:** A test tool that overwrites hooked bytes with original ntdll bytes triggers a hook-tamper alert, and hooks are re-installed within 5 seconds.
-
-### P11-T3 — Kernel Callback Tamper Detection `[XL]`
-
-**Task:** Detect callback array tampering in the kernel. Periodically verify that the driver's registered callbacks are still present in the kernel callback arrays (`PspCreateProcessNotifyRoutine`, etc.). Emit alert if callbacks are missing. Also monitor for ETW trace session stops (detect trace-session tampering from Ch. 8).
-
-**Files:** `sentinel-drv/self_protect.c`, `sentinel-drv/self_protect.h`
-
-**Acceptance Criteria:** Using a test tool that removes kernel callbacks (similar to EDRSandblast) triggers a callback-tamper alert. Stopping the ETW trace session externally triggers a trace-tamper alert.
-
-### P11-T4 — AMSI Bypass Detection `[M]`
-
-**Task:** Detect AMSI bypass attempts. In the AMSI provider, periodically verify the integrity of `AmsiScanBuffer`'s first bytes in the loaded `amsi.dll`. Detect the common patch (`mov eax, 0x80070057; ret`). Alert on tampering.
-
-**Files:** `sentinel-agent/amsi/amsi_integrity.cpp`
-
-**Acceptance Criteria:** Running a standard AMSI bypass (AmsiScanBuffer patch) triggers an AMSI-tamper alert before subsequent scans are silently skipped.
-
-### P11-T5 — Telemetry Cross-Validation `[M]`
-
-**Task:** Implement telemetry cross-validation. Compare process-creation events from the kernel driver callback against events from the `Microsoft-Windows-Kernel-Process` ETW provider. Alert if events appear in one source but not the other (indicates sensor blinding).
-
-**Files:** `sentinel-agent/crossvalidation.cpp`
-
-**Acceptance Criteria:** Disabling the kernel callback (simulated by filtering out events) triggers a cross-validation alert when ETW still reports the process creation.
+| ID | Task | Files | Acceptance Criteria | Est. |
+|----|------|-------|-------------------|------|
+| P11-T1 | Direct syscall + ntdll remap detection. Return address validation. | `sentinel-hook/evasion_detect.c` | SysWhispers → alert. ntdll remap → alert. | L |
+| P11-T2 | Hook integrity monitoring (5s interval). Re-install on removal. | `sentinel-hook/hook_integrity.c` | Overwrite → tamper alert. Hooks restored <5s. | M |
+| P11-T3 | Kernel callback tamper detection. ETW trace session monitoring. | `sentinel-drv/self_protect.c/.h` | Callback removal → alert. Trace stop → alert. | XL |
+| P11-T4 | AMSI bypass detection. AmsiScanBuffer integrity check. | `sentinel-agent/amsi/amsi_integrity.cpp` | Standard bypass → tamper alert. | M |
+| P11-T5 | Telemetry cross-validation (driver vs. ETW Kernel-Process). | `sentinel-agent/crossvalidation.cpp` | Simulated callback disable → cross-val alert. | M |
 
 ---
 
@@ -545,98 +427,58 @@ All phases build into this monorepo layout. Phase 0 scaffolds it; subsequent pha
 
 | Phase | Name | Tasks | Depends On | Book Ch. | Tier |
 |-------|------|-------|------------|----------|------|
-| P0 | Project Scaffolding | 5 tasks | — | Ch. 1 | Foundation |
-| P1 | Process/Thread Callbacks | 4 tasks | P0 | Ch. 3 | Basic |
-| P2 | Object/Image/Registry | 4 tasks | P1 | Ch. 4–5 | Basic |
-| P3 | Function-Hooking DLL | 4 tasks | P2 (KAPC) | Ch. 2 | Basic |
-| P4 | Agent Service Core | 5 tasks | P1, P3 | Ch. 1 | Basic |
-| P5 | Filesystem Minifilter | 4 tasks | P4 | Ch. 6 | Intermediate |
-| P6 | Network Filter (WFP) | 3 tasks | P4 | Ch. 7 | Intermediate |
-| P7 | ETW & AMSI | 4 tasks | P4 | Ch. 8, 10 | Intermediate |
-| P8 | Scanner Engine | 3 tasks | P4, P5 | Ch. 9 | Intermediate |
-| P9 | CLI & Config | 3 tasks | P4–P8 | Ch. 1 | Intermediate |
-| P10 | Integration Testing | 4 tasks | All | Ch. 13 | Validation |
-| P11 | Hardening | 5 tasks | All | Ch. 2–12 | Advanced |
+| P0 | Project Scaffolding | 5 | — | Ch. 1 | Foundation |
+| P1 | Process/Thread Callbacks | 4 | P0 | Ch. 3 | Basic |
+| P2 | Object/Image/Registry | 4 | P1 | Ch. 4–5 | Basic |
+| P3 | Function-Hooking DLL | 4 | P2 (KAPC) | Ch. 2 | Basic |
+| P4 | Agent Service Core | 5 | P1, P3 | Ch. 1 | Basic |
+| P5 | Filesystem Minifilter | 4 | P4 | Ch. 6 | Intermediate |
+| P6 | Network Filter (WFP) | 3 | P4 | Ch. 7 | Intermediate |
+| P7 | ETW & AMSI | 4 | P4 | Ch. 8, 10 | Intermediate |
+| P8 | Scanner Engine | 3 | P4, P5 | Ch. 9 | Intermediate |
+| P9 | CLI & Config | 4 | P4–P8 | Ch. 1 | Intermediate |
+| P10 | Integration Testing | 4 | All | Ch. 13 | Validation |
+| P11 | Hardening | 5 | All | Ch. 2–12 | Advanced |
 
-**Total tasks:** 48 across 12 phases. Estimated 35–50 Claude Code sessions for complete implementation.
+**Total: 49 tasks, 12 phases. Estimated 36–52 Claude Code sessions.**
 
 ---
 
 ## Code Conventions & Constraints
 
 ### Kernel-Mode (sentinel-drv)
-
-- Language: C17 (no C++ in kernel). No STL, no exceptions, no C runtime beyond what WDK provides.
-- Memory: all allocations tagged with a 4-byte pool tag (e.g., `'SnPc'`). `ExAllocatePool2` preferred over deprecated `ExAllocatePoolWithTag`.
-- IRQL: all callback code must document its expected IRQL. No `DISPATCH_LEVEL` code touching paged memory.
-- Error handling: every `NTSTATUS` checked. All resources cleaned up in `DriverUnload` (callbacks unregistered, communication port closed, minifilter unregistered, WFP callouts removed).
-- Driver Verifier: must pass standard Driver Verifier checks (pool tracking, IRQL checking, deadlock detection) under normal operation.
+- C17. No C++, no STL, no exceptions. Pool tag `'SnPc'`. `ExAllocatePool2`. Document IRQL. Check every NTSTATUS. Clean DriverUnload. Pass Driver Verifier.
 
 ### User-Mode (sentinel-hook, sentinel-agent, sentinel-cli)
-
-- `sentinel-hook`: C17 (DLL injected into arbitrary processes; minimize CRT dependency).
-- `sentinel-agent`: C++20 with MSVC. Prefer Win32 API over CRT where performance matters.
-- `sentinel-cli`: C++20. Keep dependencies minimal (no Boost, no heavy frameworks).
-- All components: no external network calls. No telemetry phoning home. This is a local-only tool.
-- Threading: use Windows thread pool (`CreateThreadpoolWork`) for async tasks. Named pipe I/O uses overlapped I/O.
-- Logging: structured JSON to file. No `printf` to console except in CLI and test tools.
+- sentinel-hook: C17, minimal CRT. sentinel-agent: C++20/MSVC. sentinel-cli: C++20, no Boost.
+- No external network calls (local-only v1). Thread pool for async. Overlapped pipe I/O. JSON logging.
 
 ### Detection Rules (YAML)
-
-- One rule per file, or grouped by ATT&CK tactic.
-- Fields reference `telemetry.h` field names directly.
-- Severity levels: `informational`, `low`, `medium`, `high`, `critical`.
-- Actions: `LOG` (default), `BLOCK` (where sensor supports prevention), `DECEIVE` (future).
+- Grouped by ATT&CK tactic. Fields reference `telemetry.h`. Severity: informational/low/medium/high/critical. Actions: LOG/BLOCK/DECEIVE.
 
 ---
 
 ## v2 Roadmap: Remote Management & Multi-Host
 
-v1 is intentionally local-only — all components run on a single test machine, telemetry writes to a local JSON log, and the CLI communicates with the agent over a local named pipe. This keeps the scope focused on sensor engineering and kernel-mode development.
+v1 is intentionally local-only. v2 introduces remote management (install on test machine, monitor from admin workstation).
 
-v2 introduces remote management so the EDR can be installed on a test machine and monitored from an admin workstation.
+### sentinel-server (new, admin machine)
+- TLS listener for agent connections. SQLite storage (or ELK/Splunk forwarding). REST API for alerts/telemetry/connections. Agent enrollment + heartbeat. Optional web dashboard.
 
-### Planned v2 Components
+### Agent/CLI Changes
+- Agent: configurable output mode (local/remote/both). TLS push + heartbeat. Local fallback on disconnect.
+- Signature updates shift to server-push; git pull remains as standalone fallback.
+- CLI: `--remote <server:port>` flag. All commands work identically in remote mode.
 
-**`sentinel-server`** — A new binary that runs on the admin/analyst machine. Responsibilities:
+### Design Constraints
+- Server in C++ (same toolchain). TLS only. Multi-agent. No cloud deps. Single binary.
 
-- TCP/TLS listener that accepts agent connections (mutual TLS with self-signed certs for lab use).
-- Event ingestion and storage (SQLite for simplicity, or optionally forward to ELK/Splunk).
-- REST API for querying alerts, telemetry, connection tables, and process state across enrolled agents.
-- Agent enrollment and heartbeat tracking (which agents are alive, last check-in time).
-- Optional: minimal web dashboard (single-page HTML/JS served by the REST API).
-
-**Agent changes for v2:**
-
-- `sentinel-agent` gains a configurable telemetry output mode: `local` (JSON file, same as v1), `remote` (TLS push to `sentinel-server`), or `both`.
-- Agent authenticates to server on startup, sends heartbeats, and pushes telemetry events in batches.
-- Local logging remains as a fallback if the server connection drops (buffer + retry).
-
-**CLI changes for v2:**
-
-- `sentinel-cli` gains a `--remote <server:port>` flag to connect to `sentinel-server` instead of the local named pipe.
-- All existing commands (status, alerts, scan, connections, processes, hooks) work identically in remote mode — the CLI doesn't care whether data comes from a local pipe or a remote API.
-
-### v2 Design Constraints
-
-- Server is C++ (same toolchain as the agent). No Python, no Node — keeps the project self-contained.
-- TLS only. No plaintext transport, even in lab environments.
-- Multi-agent support: server tracks telemetry per-agent and the CLI can filter by agent hostname.
-- No cloud dependencies. The server is a single binary with no external services required.
-
-### v2 Architecture Preparation in v1
-
-To make the v2 transition smooth, v1 already makes certain design decisions:
-
-- All telemetry flows through the `SENTINEL_EVENT` struct and the `common/ipc` serialization layer. Adding a TLS transport is just a new output sink — the serialization format doesn't change.
-- The named pipe protocol uses length-prefixed framing, which maps directly to a TCP stream protocol.
-- The CLI's command interface is abstract enough that swapping the transport (named pipe → HTTP/REST) requires changes only in the transport layer, not in the command logic.
-- The agent's event processing pipeline already decouples ingestion from output — adding a second output (network push alongside local file) is a pipeline fork, not a redesign.
+### v1 Prep for v2
+- `SENTINEL_EVENT` + `common/ipc` serialization → TLS is just a new sink. Length-prefixed framing → maps to TCP. CLI transport layer is abstract. Pipeline decouples ingestion from output.
 
 ### Other v2+ Candidates
-
-- **ELAM driver and EtwTi consumer** (Ch. 11–12): requires Microsoft ELAM certificate. Explore after v1 validates the rest of the architecture.
-- **Hypervisor-based detection** (Appendix): anti-exploit and anti-ransomware use cases.
-- **Adversary deception** (Ch. 1 "Advanced" tier): return spoofed data to attackers instead of blocking.
-- **RPC filters** (Appendix): DCSync and PetitPotam prevention.
-- **Nirvana hooks** (Appendix): syscall return interception as a complement to inline hooks.
+- ELAM + EtwTi (Ch. 11–12, requires MS cert)
+- Hypervisor detection (Appendix)
+- Adversary deception (Ch. 1 "Advanced")
+- RPC filters (Appendix)
+- Nirvana hooks (Appendix)

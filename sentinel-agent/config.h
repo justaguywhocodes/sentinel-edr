@@ -40,6 +40,14 @@ struct SentinelConfig {
     char        rulesRepoUrl[512];
     char        yaraRulesRepoUrl[512];
 
+    /* [output.siem] — SIEM integration (P9-T5) */
+    bool        siemEnabled;
+    char        siemEndpoint[512];
+    char        siemApiKey[256];
+    UINT32      siemBatchSize;
+    UINT32      siemFlushIntervalSec;
+    UINT32      siemSpillMaxSizeMb;
+
     /* Meta — which file was loaded (empty string if defaults) */
     char        configFilePath[MAX_PATH];
 };

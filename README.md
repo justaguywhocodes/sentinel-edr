@@ -54,6 +54,7 @@ SentinelPOC instruments a Windows system at every layer — kernel callbacks, in
 - **Three-tier detection engine**: single-event rules, time-ordered sequence rules, and threshold-based alerting
 - **14 YARA rules** detecting Cobalt Strike, Mimikatz, packed binaries, suspicious PE characteristics, and XLL shellcode
 - **Git-based rule updates** with dry-run validation and automatic rollback on failure
+- **SIEM output writer** with HTTP POST of NDJSON batches, API key auth, spill-to-disk on unavailability, and auto-drain on reconnect
 - **CLI management tool** for real-time status, alerts, process inspection, network connections, and configuration queries
 - **INI-style configuration file** with runtime-tunable paths, scanner limits, and thresholds
 - **JSON-lines telemetry logging** with automatic rotation
@@ -93,7 +94,8 @@ SentinelPOC instruments a Windows system at every layer — kernel callbacks, in
 │  │                    ├── Single-event rule engine               │
 │  │                    ├── Sequence rule engine                   │
 │  │                    ├── Threshold rule engine                  │
-│  │                    └── JSON log writer (auto-rotate)          │
+│  │                    ├── JSON log writer (auto-rotate)          │
+│  │                    └── SIEM output writer ──► HTTP POST ──► SIEM │
 │  │                                                              │
 │  ├── Command Handler ◄──────── sentinel-cli.exe (named pipe)    │
 │  └── Config Loader ◄──────── sentinel.conf (INI-style)          │
@@ -131,7 +133,7 @@ sentinel-cli <command> [args] [--json]
 | `connections` | Network connection table: remote IP, port, protocol, hit count, PIDs |
 | `processes` | Tracked processes with PPID, integrity level, elevation status |
 | `hooks` | Hook DLL injection status per tracked process |
-| `config` | Show active agent configuration (paths, scanner limits, thresholds) |
+| `config` | Show active agent configuration (paths, scanner limits, thresholds, SIEM output) |
 
 Add `--json` to any command for raw JSON output suitable for scripting and SIEM ingestion.
 
@@ -186,7 +188,26 @@ max_events_per_sec = 100     # Per-PID network event rate limit
 [git]
 # rules_repo_url = https://github.com/org/sentinel-rules.git
 # yara_rules_repo_url = https://github.com/org/sentinel-yara-rules.git
+
+[output.siem]
+enabled             = false
+# endpoint          = https://siem.example.com/api/ingest
+# api_key           = your-api-key-here
+# batch_size        = 100         # Events per HTTP POST
+# flush_interval_sec = 10         # Max seconds between flushes
+# spill_max_size_mb  = 500        # On-disk buffer when SIEM is down
 ```
+
+### SIEM Integration
+
+The agent can forward all telemetry to a SIEM endpoint (Splunk HEC, Elastic, or any NDJSON-compatible ingest API) via HTTP POST. Enable the `[output.siem]` config section and provide your endpoint URL and API key.
+
+**Features:**
+- **Batch accumulation** — events are buffered and sent in configurable batches (default 100 events or 10 seconds, whichever comes first)
+- **API key auth** — sent via `X-API-Key` header on every POST
+- **Spill-to-disk** — if the SIEM endpoint is unavailable, events are written to a local spill file (default 500 MB cap)
+- **Auto-drain** — when the SIEM comes back online, the spill file is automatically drained before new events are sent
+- **Appendix A envelope** — each event is wrapped with `schema`, `host`, `agent_id`, and `timestamp` for multi-host correlation
 
 Query the running agent's active config with `sentinel-cli config`.
 
@@ -441,6 +462,9 @@ claude-edr/
 │   │   ├── yara_scanner.cpp   libyara integration
 │   │   ├── onaccess_scanner.cpp  File event → YARA scan
 │   │   └── memory_scanner.cpp Unbacked region detection
+│   ├── output/
+│   │   ├── siem_writer.cpp    SIEM HTTP POST + spill-to-disk
+│   │   └── siem_serializer.cpp  Appendix A envelope format
 │   ├── rules/
 │   │   ├── rule_engine.cpp    Single-event rule evaluation
 │   │   ├── sequence_engine.cpp  Time-ordered sequence detection

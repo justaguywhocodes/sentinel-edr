@@ -38,6 +38,9 @@ EventProcessor::Init(const SentinelConfig& cfg)
     /* Initialize memory scanner with configured max region size */
     m_memoryScanner.Init(&m_yaraScanner, m_config.scanMaxRegionSize);
 
+    /* Initialize SIEM output writer (P9-T5) */
+    m_siemWriter.Init(m_config);
+
     /* Open JSON log with configured max size for rotation */
     return m_jsonWriter.Open(m_config.logPath, m_config.logMaxSizeBytes);
 }
@@ -45,6 +48,7 @@ EventProcessor::Init(const SentinelConfig& cfg)
 void
 EventProcessor::Shutdown()
 {
+    m_siemWriter.Shutdown();
     m_memoryScanner.Shutdown();
     m_onAccessScanner.Shutdown();
     m_yaraScanner.Shutdown();
@@ -90,6 +94,9 @@ EventProcessor::Process(const SENTINEL_EVENT& evt)
 
     /* 6. Write JSON to log file */
     m_jsonWriter.WriteEvent(evt, parentImagePath);
+
+    /* 6b. Send to SIEM output (P9-T5) */
+    m_siemWriter.Enqueue(evt, parentImagePath);
 
     /* 7. Print summary to stdout for console mode */
     PrintSummary(evt);

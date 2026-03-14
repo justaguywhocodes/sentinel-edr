@@ -34,6 +34,7 @@
 #include "scanner/yara_scanner.h"
 #include "scanner/onaccess_scanner.h"
 #include "scanner/memory_scanner.h"
+#include "output/siem_writer.h"
 
 /* ── Rule count summary (returned by GetRuleCounts) ──────────────────────── */
 
@@ -139,6 +140,7 @@ private:
     YaraScanner       m_yaraScanner;
     OnAccessScanner   m_onAccessScanner;
     MemoryScanner     m_memoryScanner;
+    SiemWriter        m_siemWriter;
     ULONGLONG         m_eventsProcessed = 0;
 
     /* Alert ring buffer for CLI `alerts` command (P9-T1) */

@@ -27,6 +27,8 @@ add_executable(sentinel-agent
     scanner/yara_scanner.cpp
     scanner/onaccess_scanner.cpp
     scanner/memory_scanner.cpp
+    output/siem_serializer.cpp
+    output/siem_writer.cpp
     cmd_handler.cpp
 )
 
@@ -40,7 +42,8 @@ target_include_directories(sentinel-agent PRIVATE
 # ole32.lib — CoCreateGuid (SentinelEventInit)
 # tdh.lib — Trace Data Helper (ETW event parsing, future use)
 # libyara — YARA pattern matching engine (P8-T1)
-target_link_libraries(sentinel-agent PRIVATE fltLib.lib advapi32.lib ole32.lib tdh.lib libyara)
+# winhttp.lib — WinHTTP for SIEM output (P9-T5)
+target_link_libraries(sentinel-agent PRIVATE fltLib.lib advapi32.lib ole32.lib tdh.lib libyara winhttp.lib)
 
 set_target_properties(sentinel-agent PROPERTIES
     CXX_STANDARD 20

@@ -227,19 +227,21 @@ SiemWriter::WorkerLoop()
                     return m_shutdown || m_queue.size() >= m_batchSize;
                 });
 
-            if (m_queue.empty() && m_shutdown) {
-                break;  /* Nothing left, exit */
-            }
-
-            /* Drain up to batchSize events */
-            size_t count = (std::min)((size_t)m_batchSize, m_queue.size());
-            for (size_t i = 0; i < count; i++) {
-                batch.push_back(std::move(m_queue.front()));
-                m_queue.pop_front();
+            if (m_shutdown) {
+                /* Shutting down — drain entire queue at once and exit */
+                batch = std::move(m_queue);
+            } else {
+                /* Normal operation — drain up to batchSize events */
+                size_t count = (std::min)((size_t)m_batchSize, m_queue.size());
+                for (size_t i = 0; i < count; i++) {
+                    batch.push_back(std::move(m_queue.front()));
+                    m_queue.pop_front();
+                }
             }
         }
 
         if (batch.empty()) {
+            if (m_shutdown) break;
             continue;
         }
 
@@ -262,35 +264,11 @@ SiemWriter::WorkerLoop()
         if (!HttpPost(ndjson)) {
             SpillToDisk(ndjson);
         }
+
+        if (m_shutdown) break;
     }
 
-    /* Final drain: process any remaining queued events.
-     * Try a single POST; if it fails, spill everything once and move on.
-     * Do NOT retry — the agent is shutting down. */
-    std::deque<QueueEntry> remaining;
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        remaining = std::move(m_queue);
-    }
-
-    if (!remaining.empty()) {
-        std::string ndjson;
-        ndjson.reserve(remaining.size() * 1024);
-
-        for (const auto& entry : remaining) {
-            ndjson += SiemSerializeEvent(entry.evt, entry.parentImagePath,
-                                          m_hostname, m_agentId);
-            ndjson += '\n';
-        }
-
-        if (!HttpPost(ndjson)) {
-            SpillToDisk(ndjson);
-            if (!ndjson.empty()) {
-                std::printf("SentinelAgent: SIEM: %zu events spilled at shutdown\n",
-                            remaining.size());
-            }
-        }
-    }
+    /* Loop above already drained the queue on shutdown — nothing left. */
 
     std::printf("SentinelAgent: SIEM writer stopped\n");
 }

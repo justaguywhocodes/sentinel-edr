@@ -75,9 +75,22 @@ SiemWriter::Init(const SentinelConfig& cfg)
                              ? cfg.siemFlushIntervalSec : 10;
     m_spillMaxBytes    = (UINT64)cfg.siemSpillMaxSizeMb * 1024 * 1024;
 
-    /* Spill file path: next to the log file */
+    /* Spill file path: next to the log file.
+     * Derive the directory from logPath so the spill file lands in the
+     * same folder as agent_events.jsonl. */
     m_spillPath = cfg.logPath;
     m_spillPath += ".siem-spill";
+
+    /* Ensure the parent directory exists (handles the case where logPath's
+     * directory hasn't been created yet). */
+    {
+        std::string dir = m_spillPath;
+        auto pos = dir.find_last_of("\\/");
+        if (pos != std::string::npos) {
+            dir.resize(pos);
+            CreateDirectoryA(dir.c_str(), nullptr);  /* OK if it already exists */
+        }
+    }
 
     /* Identity */
     m_hostname = GetMachineHostname();
@@ -240,8 +253,10 @@ SiemWriter::WorkerLoop()
             ndjson += '\n';
         }
 
-        /* Try to drain spill file first (if any) */
-        DrainSpillFile();
+        /* Try to drain spill file first (if any — skip during shutdown) */
+        if (!m_shutdown) {
+            DrainSpillFile();
+        }
 
         /* POST the batch */
         if (!HttpPost(ndjson)) {
@@ -249,7 +264,9 @@ SiemWriter::WorkerLoop()
         }
     }
 
-    /* Final drain: process any remaining queued events */
+    /* Final drain: process any remaining queued events.
+     * Try a single POST; if it fails, spill everything once and move on.
+     * Do NOT retry — the agent is shutting down. */
     std::deque<QueueEntry> remaining;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -268,6 +285,10 @@ SiemWriter::WorkerLoop()
 
         if (!HttpPost(ndjson)) {
             SpillToDisk(ndjson);
+            if (!ndjson.empty()) {
+                std::printf("SentinelAgent: SIEM: %zu events spilled at shutdown\n",
+                            remaining.size());
+            }
         }
     }
 

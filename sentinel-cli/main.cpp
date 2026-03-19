@@ -862,6 +862,25 @@ PrintConfig(const std::string& json)
         std::printf("  YARA repo:     %s\n",
                     yaraRepo.empty() ? "(not configured)" : yaraRepo.c_str());
     }
+
+    std::printf("\n  [output.siem]\n");
+    std::string siemEnabled  = JsonGetValue(json, "enabled");
+    std::string siemEndpoint = JsonGetString(json, "endpoint");
+    std::string siemApiKey   = JsonGetString(json, "api_key");
+    std::printf("  Enabled:       %s\n",
+                siemEnabled == "true" ? "yes" : "no");
+    if (siemEnabled == "true") {
+        std::printf("  Endpoint:      %s\n",
+                    siemEndpoint.empty() ? "(not configured)" : siemEndpoint.c_str());
+        std::printf("  API key:       %s\n",
+                    siemApiKey.empty() ? "(not configured)" : siemApiKey.c_str());
+        std::printf("  Batch size:    %s\n",
+                    JsonGetValue(json, "batch_size").c_str());
+        std::printf("  Flush interval:%s seconds\n",
+                    JsonGetValue(json, "flush_interval_sec").c_str());
+        std::printf("  Spill max:     %s MB\n",
+                    JsonGetValue(json, "spill_max_size_mb").c_str());
+    }
 }
 
 /* ── Main ────────────────────────────────────────────────────────────────── */

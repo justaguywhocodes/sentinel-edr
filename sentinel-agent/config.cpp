@@ -128,6 +128,14 @@ ConfigSetDefaults(SentinelConfig& cfg)
     /* [git] — no default repo URLs */
     cfg.rulesRepoUrl[0]     = '\0';
     cfg.yaraRulesRepoUrl[0] = '\0';
+
+    /* [output.siem] — disabled by default */
+    cfg.siemEnabled          = false;
+    cfg.siemEndpoint[0]      = '\0';
+    cfg.siemApiKey[0]        = '\0';
+    cfg.siemBatchSize        = 100;
+    cfg.siemFlushIntervalSec = 10;
+    cfg.siemSpillMaxSizeMb   = 500;
 }
 
 /* ── ConfigLoad ─────────────────────────────────────────────────────────── */
@@ -208,6 +216,35 @@ ConfigLoad(SentinelConfig& cfg, const char* path)
         strcpy_s(cfg.yaraRulesRepoUrl, val.c_str());
     }
 
+    /* [output.siem] */
+    val = IniGet(ini, "output.siem", "enabled");
+    if (!val.empty()) {
+        std::string lower = val;
+        ToLower(lower);
+        cfg.siemEnabled = (lower == "true" || lower == "1" || lower == "yes");
+    }
+
+    val = IniGet(ini, "output.siem", "endpoint");
+    if (!val.empty()) {
+        strcpy_s(cfg.siemEndpoint, val.c_str());
+    }
+
+    val = IniGet(ini, "output.siem", "api_key");
+    if (!val.empty()) {
+        strcpy_s(cfg.siemApiKey, val.c_str());
+    }
+
+    cfg.siemBatchSize = IniGetUint(ini, "output.siem", "batch_size",
+                                    cfg.siemBatchSize);
+
+    cfg.siemFlushIntervalSec = IniGetUint(ini, "output.siem",
+                                           "flush_interval_sec",
+                                           cfg.siemFlushIntervalSec);
+
+    cfg.siemSpillMaxSizeMb = IniGetUint(ini, "output.siem",
+                                         "spill_max_size_mb",
+                                         cfg.siemSpillMaxSizeMb);
+
     return true;
 }
 
@@ -242,6 +279,8 @@ ConfigToJson(const SentinelConfig& cfg)
     std::string configFile   = cfg.configFilePath;
     std::string rulesRepo    = cfg.rulesRepoUrl;
     std::string yaraRepo     = cfg.yaraRulesRepoUrl;
+    std::string siemEndpoint = cfg.siemEndpoint;
+    std::string siemApiKey   = cfg.siemApiKey;
 
     JsonEscape(logPath);
     JsonEscape(amsiDll);
@@ -250,6 +289,17 @@ ConfigToJson(const SentinelConfig& cfg)
     JsonEscape(configFile);
     JsonEscape(rulesRepo);
     JsonEscape(yaraRepo);
+    JsonEscape(siemEndpoint);
+    JsonEscape(siemApiKey);
+
+    /* Mask API key for display — show only last 4 chars */
+    std::string maskedKey;
+    if (siemApiKey.size() > 4) {
+        maskedKey = std::string(siemApiKey.size() - 4, '*')
+                    + siemApiKey.substr(siemApiKey.size() - 4);
+    } else {
+        maskedKey = siemApiKey;
+    }
 
     char buf[4096];
     _snprintf_s(buf, sizeof(buf), _TRUNCATE,
@@ -275,6 +325,14 @@ ConfigToJson(const SentinelConfig& cfg)
         "\"git\":{"
             "\"rules_repo_url\":\"%s\","
             "\"yara_rules_repo_url\":\"%s\""
+        "},"
+        "\"output_siem\":{"
+            "\"enabled\":%s,"
+            "\"endpoint\":\"%s\","
+            "\"api_key\":\"%s\","
+            "\"batch_size\":%u,"
+            "\"flush_interval_sec\":%u,"
+            "\"spill_max_size_mb\":%u"
         "}"
         "}",
         configFile.c_str(),
@@ -288,7 +346,13 @@ ConfigToJson(const SentinelConfig& cfg)
         cfg.logMaxSizeBytes / (1024 * 1024),
         cfg.netMaxEventsPerSec,
         rulesRepo.c_str(),
-        yaraRepo.c_str());
+        yaraRepo.c_str(),
+        cfg.siemEnabled ? "true" : "false",
+        siemEndpoint.c_str(),
+        maskedKey.c_str(),
+        cfg.siemBatchSize,
+        cfg.siemFlushIntervalSec,
+        cfg.siemSpillMaxSizeMb);
 
     return buf;
 }

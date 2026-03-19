@@ -307,6 +307,13 @@ JsonWriter::RotateIfNeeded()
 
 /* ── Event serialization ─────────────────────────────────────────────────── */
 
+std::string
+JsonWriter::SerializeEvent(const SENTINEL_EVENT& evt,
+                            const std::wstring& parentImagePath)
+{
+    return EventToJson(evt, parentImagePath);
+}
+
 void
 JsonWriter::WriteEvent(const SENTINEL_EVENT& evt,
                        const std::wstring& parentImagePath)

@@ -29,6 +29,7 @@
 #include "cmd_handler.h"
 #include "etw/etw_consumer.h"
 #include "amsi/amsi_register.h"
+#include "amsi/amsi_integrity.h"
 #include "ipc.h"
 #include "ipc_serialize.h"
 #include "constants.h"
@@ -446,6 +447,9 @@ PipelineStart(const AkesoEDRConfig& cfg)
                  "(AMSI scanning will not be active)\n");
     }
 
+    /* Start AMSI integrity monitor (P11-T4) — after AMSI registration */
+    AmsiIntegrityInit(&g_EventProcessor.GetJsonWriter());
+
     /* Start threads */
     g_PortReceiverThread = std::thread(DriverPortReceiverThread);
     g_PipeListenerThread = std::thread(PipeListenerThread);
@@ -471,6 +475,9 @@ PipelineStop()
         SetEvent(g_ShutdownEvent);
     }
     g_EventQueue.Shutdown();
+
+    /* Stop AMSI integrity monitor (P11-T4) */
+    AmsiIntegrityShutdown();
 
     /* Unregister AMSI provider (before ETW stop so cleanup is clean) */
     AmsiProviderUnregister();

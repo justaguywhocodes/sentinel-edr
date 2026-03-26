@@ -35,6 +35,7 @@
 #include "scanner/onaccess_scanner.h"
 #include "scanner/memory_scanner.h"
 #include "output/siem_writer.h"
+#include "crossvalidation.h"
 
 /* ── Rule count summary (returned by GetRuleCounts) ──────────────────────── */
 
@@ -82,6 +83,9 @@ public:
 
     /* Access the YARA scanner (for on-demand scans, hot-reload from CLI). */
     YaraScanner& GetYaraScanner() { return m_yaraScanner; }
+
+    /* Access the JSON writer (for AMSI integrity alerts, P11-T4). */
+    JsonWriter& GetJsonWriter() { return m_jsonWriter; }
 
     /* Total events processed since Init. */
     ULONGLONG EventsProcessed() const { return m_eventsProcessed; }
@@ -141,6 +145,7 @@ private:
     OnAccessScanner   m_onAccessScanner;
     MemoryScanner     m_memoryScanner;
     SiemWriter        m_siemWriter;
+    CrossValidator    m_crossValidator;
     ULONGLONG         m_eventsProcessed = 0;
 
     /* Alert ring buffer for CLI `alerts` command (P9-T1) */

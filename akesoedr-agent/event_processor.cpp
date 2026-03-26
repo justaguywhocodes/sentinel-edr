@@ -41,6 +41,9 @@ EventProcessor::Init(const AkesoEDRConfig& cfg)
     /* Initialize SIEM output writer (P9-T5) */
     m_siemWriter.Init(m_config);
 
+    /* Initialize cross-validator (P11-T5) */
+    m_crossValidator.Init(&m_jsonWriter);
+
     /* Open JSON log with configured max size for rotation */
     return m_jsonWriter.Open(m_config.logPath, m_config.logMaxSizeBytes);
 }
@@ -67,6 +70,12 @@ EventProcessor::Process(const AKESOEDR_EVENT& evt)
 
     /* 1b. Update connection table from network events */
     m_networkTable.OnNetworkEvent(evt);
+
+    /* 1c. Cross-validate driver vs ETW process creation (P11-T5) */
+    m_crossValidator.OnEvent(evt);
+    if (m_eventsProcessed % 1000 == 0) {
+        m_crossValidator.Sweep();
+    }
 
     /* 1c. On-access YARA scan for minifilter file events (P8-T2) */
     if (evt.Source == AkesoEDRSourceDriverMinifilter) {

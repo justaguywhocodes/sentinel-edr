@@ -24,6 +24,8 @@ add_executable(akesoedr-agent
     etw/provider_rpc.cpp
     etw/provider_kernelprocess.cpp
     amsi/amsi_register.cpp
+    amsi/amsi_integrity.cpp
+    crossvalidation.cpp
     scanner/yara_scanner.cpp
     scanner/onaccess_scanner.cpp
     scanner/memory_scanner.cpp

@@ -19,6 +19,7 @@
 #include "telemetry.h"
 #include "comms.h"
 #include "callbacks_process.h"
+#include "self_protect.h"
 
 /* ── Undocumented/missing kernel API declarations ─────────────────────────── */
 
@@ -146,6 +147,9 @@ AkesoEDRProcessNotifyCallback(
 )
 {
     AKESOEDR_EVENT *event;
+
+    /* P11-T3: Canary counter for self-protection monitoring */
+    AkesoEDRCanaryProcessCallback();
 
     /*
      * AKESOEDR_EVENT is ~22 KB — far too large for the kernel stack

@@ -18,6 +18,7 @@
 #include "constants.h"
 #include "telemetry.h"
 #include "comms.h"
+#include "self_protect.h"
 
 /* ── Undocumented but stable kernel APIs ────────────────────────────────── */
 
@@ -211,6 +212,8 @@ AkesoEDRRegistryCallback(
     NTSTATUS            status;
 
     UNREFERENCED_PARAMETER(CallbackContext);
+
+    AkesoEDRCanaryRegistryCallback();
 
     if (!Argument1 || !Argument2) {
         return STATUS_SUCCESS;

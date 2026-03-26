@@ -47,6 +47,7 @@
 
 #define AKESOEDR_DRIVER_SERVICE     L"AkesoEDRDrv"
 #define AKESOEDR_AGENT_SERVICE      L"AkesoEDRAgent"
+#define AKESOEDR_WATCHDOG_SERVICE   L"AkesoEDRWatchdog"
 
 /* ── IOCTL codes ─────────────────────────────────────────────────────────── */
 

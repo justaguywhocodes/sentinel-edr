@@ -276,7 +276,16 @@ typedef struct _AKESOEDR_HOOK_EVENT {
     WCHAR               CallingModule[AKESOEDR_MAX_MODULE_NAME];
     ULONG               StackHash;
     NTSTATUS            ReturnStatus;
+    /*
+     * P11-T1: Evasion detection flags (bitfield).
+     *   Bit 0: Return address outside known modules (direct syscall)
+     *   Bit 1: ntdll .text section integrity mismatch (remap)
+     */
+    ULONG               EvasionFlags;
 } AKESOEDR_HOOK_EVENT;
+
+#define AKESOEDR_EVASION_DIRECT_SYSCALL   0x1
+#define AKESOEDR_EVASION_NTDLL_REMAP      0x2
 
 /*
  * Ch. 8: ETW events (aggregated from multiple providers)

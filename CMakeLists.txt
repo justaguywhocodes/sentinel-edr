@@ -46,6 +46,7 @@ add_subdirectory(akesoedr-hook)
 add_subdirectory(akesoedr-agent)
 add_subdirectory(akesoedr-cli)
 add_subdirectory(akesoedr-amsi)
+add_subdirectory(akesoedr-watchdog)
 
 # Tests
 enable_testing()

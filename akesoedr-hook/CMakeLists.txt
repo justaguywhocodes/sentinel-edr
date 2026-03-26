@@ -11,6 +11,8 @@ add_library(akesoedr-hook SHARED
     hooks_process.c
     hooks_pipe.c
     pipe_client.c
+    evasion_detect.c
+    hook_integrity.c
 )
 
 target_include_directories(akesoedr-hook PRIVATE ${CMAKE_SOURCE_DIR}/common)

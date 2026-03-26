@@ -833,3 +833,62 @@ HookEngineGetInstallCount(void)
     }
     return count;
 }
+
+/* ── P11-T2: Hook state accessors for integrity monitor ───────────────── */
+
+void *
+AkesoEDRGetHookTarget(int index)
+{
+    if (index < 0 || index >= MAX_HOOKS || !g_Hooks[index].Active)
+        return NULL;
+    return g_Hooks[index].TargetFunc;
+}
+
+const char *
+AkesoEDRGetHookName(int index)
+{
+    if (index < 0 || index >= MAX_HOOKS || !g_Hooks[index].Active)
+        return NULL;
+    return g_Hooks[index].FunctionName;
+}
+
+BOOL
+AkesoEDRIsHookActive(int index)
+{
+    if (index < 0 || index >= MAX_HOOKS)
+        return FALSE;
+    return g_Hooks[index].Active;
+}
+
+BOOL
+AkesoEDRReinstallHook(int index)
+{
+    if (index < 0 || index >= MAX_HOOKS || !g_Hooks[index].Active)
+        return FALSE;
+
+    HOOK_ENTRY *entry = &g_Hooks[index];
+
+    /* Rebuild the 12-byte absolute JMP: mov rax, <detour>; jmp rax */
+    BYTE patch[JMP_ABS_SIZE];
+    patch[0] = 0x48;
+    patch[1] = 0xB8;
+    *(UINT64 *)(patch + 2) = (UINT64)entry->DetourFunc;
+    patch[10] = 0xFF;
+    patch[11] = 0xE0;
+
+    /* Re-write the target function entry point */
+    memcpy(entry->TargetFunc, patch, JMP_ABS_SIZE);
+
+    /* NOP-pad remainder if stolen bytes > 12 */
+    if (entry->StolenSize > JMP_ABS_SIZE) {
+        memset((BYTE *)entry->TargetFunc + JMP_ABS_SIZE, 0x90,
+               entry->StolenSize - JMP_ABS_SIZE);
+    }
+
+    FlushInstructionCache(GetCurrentProcess(),
+                          entry->TargetFunc, entry->StolenSize);
+
+    DIAG_LOG("HookEngine: REINSTALLED hook[%d] %s\r\n",
+             index, entry->FunctionName);
+    return TRUE;
+}

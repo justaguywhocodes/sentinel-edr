@@ -13,6 +13,7 @@
 #include <intrin.h>
 #include "hook_engine.h"
 #include "hooks_common.h"
+#include "evasion_detect.h"
 
 /* ── Ntdll typedefs ───────────────────────────────────────────────────────── */
 
@@ -87,6 +88,9 @@ Hooked_NtAllocateVirtualMemory(
         evt.ReturnAddress   = (ULONG_PTR)_ReturnAddress();
         evt.ReturnStatus    = status;
         evt.StackHash       = AkesoEDRCaptureStackHash();
+        evt.EvasionFlags    = 0;
+        if (!AkesoEDRCheckReturnAddress(evt.ReturnAddress))
+            evt.EvasionFlags |= AKESOEDR_EVASION_DIRECT_SYSCALL;
 
         AkesoEDRGetCallingModule(evt.ReturnAddress,
                                  evt.CallingModule, AKESOEDR_MAX_MODULE_NAME);
@@ -125,6 +129,9 @@ Hooked_NtProtectVirtualMemory(
         evt.ReturnAddress   = (ULONG_PTR)_ReturnAddress();
         evt.ReturnStatus    = status;
         evt.StackHash       = AkesoEDRCaptureStackHash();
+        evt.EvasionFlags    = 0;
+        if (!AkesoEDRCheckReturnAddress(evt.ReturnAddress))
+            evt.EvasionFlags |= AKESOEDR_EVASION_DIRECT_SYSCALL;
 
         AkesoEDRGetCallingModule(evt.ReturnAddress,
                                  evt.CallingModule, AKESOEDR_MAX_MODULE_NAME);
@@ -163,6 +170,9 @@ Hooked_NtWriteVirtualMemory(
         evt.ReturnAddress   = (ULONG_PTR)_ReturnAddress();
         evt.ReturnStatus    = status;
         evt.StackHash       = AkesoEDRCaptureStackHash();
+        evt.EvasionFlags    = 0;
+        if (!AkesoEDRCheckReturnAddress(evt.ReturnAddress))
+            evt.EvasionFlags |= AKESOEDR_EVASION_DIRECT_SYSCALL;
 
         AkesoEDRGetCallingModule(evt.ReturnAddress,
                                  evt.CallingModule, AKESOEDR_MAX_MODULE_NAME);
@@ -201,6 +211,9 @@ Hooked_NtReadVirtualMemory(
         evt.ReturnAddress   = (ULONG_PTR)_ReturnAddress();
         evt.ReturnStatus    = status;
         evt.StackHash       = AkesoEDRCaptureStackHash();
+        evt.EvasionFlags    = 0;
+        if (!AkesoEDRCheckReturnAddress(evt.ReturnAddress))
+            evt.EvasionFlags |= AKESOEDR_EVASION_DIRECT_SYSCALL;
 
         AkesoEDRGetCallingModule(evt.ReturnAddress,
                                  evt.CallingModule, AKESOEDR_MAX_MODULE_NAME);

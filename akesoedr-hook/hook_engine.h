@@ -67,4 +67,39 @@ void RemoveAllHooks(void);
  */
 int HookEngineGetInstallCount(void);
 
+/*
+ * P11-T2: Hook integrity support.
+ */
+
+/* Maximum number of hook slots (must match internal MAX_HOOKS) */
+#define AKESOEDR_MAX_HOOKS  16
+
+/*
+ * AkesoEDRGetHookTarget
+ *   Returns the target function address for hook slot 'index',
+ *   or NULL if the slot is inactive. Used by integrity monitor.
+ */
+void *AkesoEDRGetHookTarget(int index);
+
+/*
+ * AkesoEDRGetHookName
+ *   Returns the function name for hook slot 'index',
+ *   or NULL if inactive.
+ */
+const char *AkesoEDRGetHookName(int index);
+
+/*
+ * AkesoEDRIsHookActive
+ *   Returns TRUE if the hook slot 'index' is active.
+ */
+BOOL AkesoEDRIsHookActive(int index);
+
+/*
+ * AkesoEDRReinstallHook
+ *   Re-patch the target function at slot 'index' with the JMP to detour.
+ *   Used by hook integrity monitor to restore tampered hooks.
+ *   Returns TRUE on success.
+ */
+BOOL AkesoEDRReinstallHook(int index);
+
 #endif /* AKESOEDR_HOOK_ENGINE_H */

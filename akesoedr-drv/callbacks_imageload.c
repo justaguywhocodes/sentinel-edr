@@ -24,6 +24,7 @@
 #include "constants.h"
 #include "telemetry.h"
 #include "comms.h"
+#include "self_protect.h"
 
 /* ── Undocumented but stable kernel APIs ────────────────────────────────── */
 
@@ -171,6 +172,8 @@ AkesoEDRImageLoadCallback(
 )
 {
     AKESOEDR_EVENT *event;
+
+    AkesoEDRCanaryImageLoadCallback();
 
     if (!ImageInfo) {
         return;

@@ -16,6 +16,8 @@
 #include "hook_engine.h"
 #include "hooks_common.h"
 #include "pipe_client.h"
+#include "evasion_detect.h"
+#include "hook_integrity.h"
 
 /* ── Hook installation ─────────────────────────────────────────────────────── */
 
@@ -23,6 +25,9 @@ static void
 InstallAllHooks(void)
 {
     HookEngineInit();
+
+    /* P11-T1: Cache module ranges + ntdll .text CRC (pre-hook baseline) */
+    AkesoEDREvasionInit();
 
     /* P3-T2: Core injection-detection hooks */
     InstallMemoryHooks();       /* NtAllocate/Protect/Write/ReadVirtualMemory */
@@ -34,6 +39,9 @@ InstallAllHooks(void)
 
     /* P5-T3: Named pipe monitoring */
     InstallPipeHooks();         /* NtCreateNamedPipeFile */
+
+    /* P11-T1: Recapture ntdll CRC after hooks are installed */
+    AkesoEDREvasionRecaptureBaseline();
 
     /*
      * One-time init log. Uses _snprintf_s (CRT) + WriteFile (kernel32)
@@ -81,9 +89,12 @@ DllMain(
             AkesoEDRPipeClientInit();
             InstallAllHooks();
             AkesoEDRHooksSetReady();
+            /* P11-T2: Start hook integrity monitor (5s interval) */
+            AkesoEDRHookIntegrityStart();
             break;
 
         case DLL_PROCESS_DETACH:
+            AkesoEDRHookIntegrityStop();    /* P11-T2: Stop monitor first */
             RemoveAllInstalledHooks();
             AkesoEDRPipeClientShutdown();
             AkesoEDRTlsCleanup();

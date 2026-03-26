@@ -17,6 +17,7 @@ wdk_add_driver(akesoedr-drv
     minifilter_pipes.c
     file_hash.c
     wfp_callout.c
+    self_protect.c
 )
 
 target_include_directories(akesoedr-drv PRIVATE ${CMAKE_SOURCE_DIR}/common)

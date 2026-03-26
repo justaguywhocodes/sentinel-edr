@@ -26,6 +26,7 @@
 #include "constants.h"
 #include "telemetry.h"
 #include "comms.h"
+#include "self_protect.h"
 
 /* ── Undocumented but stable kernel APIs ───────────────────────────────── */
 
@@ -251,6 +252,8 @@ AkesoEDRPreCreate(
 {
     UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(CompletionContext);
+
+    AkesoEDRCanaryMinifilterCallback();
 
     if (AkesoEDRMinifilterShouldSkipPreOp(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;

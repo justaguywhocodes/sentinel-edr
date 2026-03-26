@@ -30,6 +30,7 @@
 #include "minifilter_pipes.h"
 #include "file_hash.h"
 #include "wfp_callout.h"
+#include "self_protect.h"
 
 /* ── Forward declarations ────────────────────────────────────────────────── */
 
@@ -106,6 +107,9 @@ AkesoEDRFilterUnload(
 {
     UNREFERENCED_PARAMETER(Flags);
     PAGED_CODE();
+
+    /* P11-T3: Stop self-protection monitor first */
+    AkesoEDRSelfProtectShutdown();
 
     /* Unregister callbacks before tearing down comms (reverse init order) */
     AkesoEDRWfpStop();
@@ -301,7 +305,16 @@ DriverEntry(
         goto cleanup_hash;
     }
 
-    /* ── Step 13: Start filtering ──────────────────────────────────────── */
+    /* ── Step 13: Self-protection monitoring (P11-T3) ─────────────────── */
+
+    status = AkesoEDRSelfProtectInit();
+    if (!NT_SUCCESS(status)) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "AkesoEDR: AkesoEDRSelfProtectInit failed 0x%08X (non-fatal)\n", status));
+        /* Non-fatal — continue without self-protection */
+    }
+
+    /* ── Step 14: Start filtering ──────────────────────────────────────── */
 
     status = FltStartFiltering(g_FilterHandle);
     if (!NT_SUCCESS(status)) {

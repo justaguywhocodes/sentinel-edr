@@ -524,6 +524,9 @@ JsonWriter::HookPayloadToJson(const AKESOEDR_HOOK_EVENT& hook)
     json += DwordToHex(hook.ReturnStatus);
     json += "\"";
 
+    json += ",\"evasionFlags\":";
+    json += std::to_string(hook.EvasionFlags);
+
     json += '}';
     return json;
 }

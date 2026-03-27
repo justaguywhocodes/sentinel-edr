@@ -13,7 +13,7 @@
 
 #include <windows.h>
 #include "edr_shim.h"
-#include "../telemetry.h"
+#include "telemetry.h"
 
 struct AkesoEDRConfig;
 class SiemWriter;

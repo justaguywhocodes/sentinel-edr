@@ -63,12 +63,13 @@ private:
     static void SiemCallbackStatic(const void* event, void* user_data);
     void OnSiemEvent(const void* event);
 
-    /* Cache of paths that failed with I/O error — skip for 60 seconds */
-    struct FailEntry {
+    /* Cache of recent scan results (pass, fail, or detect) — skip for TTL */
+    struct CacheEntry {
         std::chrono::steady_clock::time_point when;
+        bool detected;
     };
-    std::unordered_map<std::wstring, FailEntry> m_failCache;
-    static constexpr int FAIL_CACHE_TTL_SEC = 60;
+    std::unordered_map<std::wstring, CacheEntry> m_scanCache;
+    static constexpr int CACHE_TTL_SEC = 300;  /* 5 minutes */
 };
 
 #endif /* AKESOEDR_AV_SCANNER_H */

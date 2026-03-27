@@ -136,6 +136,13 @@ ConfigSetDefaults(AkesoEDRConfig& cfg)
     cfg.siemBatchSize        = 100;
     cfg.siemFlushIntervalSec = 10;
     cfg.siemSpillMaxSizeMb   = 500;
+
+    /* [av] — AkesoAV integration, disabled by default */
+    cfg.avEnabled          = false;
+    cfg.avDllPath[0]       = '\0';
+    cfg.avDbPath[0]        = '\0';
+    cfg.avHeuristicLevel   = 2;
+    cfg.avScanTimeoutMs    = 5000;
 }
 
 /* ── ConfigLoad ─────────────────────────────────────────────────────────── */
@@ -245,6 +252,29 @@ ConfigLoad(AkesoEDRConfig& cfg, const char* path)
                                          "spill_max_size_mb",
                                          cfg.siemSpillMaxSizeMb);
 
+    /* [av] */
+    val = IniGet(ini, "av", "enabled");
+    if (!val.empty()) {
+        std::string lower = val;
+        ToLower(lower);
+        cfg.avEnabled = (lower == "true" || lower == "1" || lower == "yes");
+    }
+
+    val = IniGet(ini, "av", "dll_path");
+    if (!val.empty()) {
+        strcpy_s(cfg.avDllPath, val.c_str());
+    }
+
+    val = IniGet(ini, "av", "db_path");
+    if (!val.empty()) {
+        strcpy_s(cfg.avDbPath, val.c_str());
+    }
+
+    cfg.avHeuristicLevel = IniGetUint(ini, "av", "heuristic_level",
+                                       cfg.avHeuristicLevel);
+    cfg.avScanTimeoutMs  = IniGetUint(ini, "av", "scan_timeout_ms",
+                                       cfg.avScanTimeoutMs);
+
     return true;
 }
 
@@ -281,6 +311,8 @@ ConfigToJson(const AkesoEDRConfig& cfg)
     std::string yaraRepo     = cfg.yaraRulesRepoUrl;
     std::string siemEndpoint = cfg.siemEndpoint;
     std::string siemApiKey   = cfg.siemApiKey;
+    std::string avDllPath    = cfg.avDllPath;
+    std::string avDbPath     = cfg.avDbPath;
 
     JsonEscape(logPath);
     JsonEscape(amsiDll);
@@ -291,6 +323,8 @@ ConfigToJson(const AkesoEDRConfig& cfg)
     JsonEscape(yaraRepo);
     JsonEscape(siemEndpoint);
     JsonEscape(siemApiKey);
+    JsonEscape(avDllPath);
+    JsonEscape(avDbPath);
 
     /* Mask API key for display — show only last 4 chars */
     std::string maskedKey;
@@ -333,6 +367,13 @@ ConfigToJson(const AkesoEDRConfig& cfg)
             "\"batch_size\":%u,"
             "\"flush_interval_sec\":%u,"
             "\"spill_max_size_mb\":%u"
+        "},"
+        "\"av\":{"
+            "\"enabled\":%s,"
+            "\"dll_path\":\"%s\","
+            "\"db_path\":\"%s\","
+            "\"heuristic_level\":%u,"
+            "\"scan_timeout_ms\":%u"
         "}"
         "}",
         configFile.c_str(),
@@ -352,7 +393,12 @@ ConfigToJson(const AkesoEDRConfig& cfg)
         maskedKey.c_str(),
         cfg.siemBatchSize,
         cfg.siemFlushIntervalSec,
-        cfg.siemSpillMaxSizeMb);
+        cfg.siemSpillMaxSizeMb,
+        cfg.avEnabled ? "true" : "false",
+        avDllPath.c_str(),
+        avDbPath.c_str(),
+        cfg.avHeuristicLevel,
+        cfg.avScanTimeoutMs);
 
     return buf;
 }

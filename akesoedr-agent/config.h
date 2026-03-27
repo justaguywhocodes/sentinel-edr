@@ -48,6 +48,13 @@ struct AkesoEDRConfig {
     UINT32      siemFlushIntervalSec;
     UINT32      siemSpillMaxSizeMb;
 
+    /* [av] — AkesoAV integration */
+    bool        avEnabled;
+    char        avDllPath[MAX_PATH];
+    char        avDbPath[MAX_PATH];
+    UINT32      avHeuristicLevel;
+    UINT32      avScanTimeoutMs;
+
     /* Meta — which file was loaded (empty string if defaults) */
     char        configFilePath[MAX_PATH];
 };

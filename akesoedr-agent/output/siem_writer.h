@@ -48,6 +48,13 @@ public:
                  const std::wstring& parentImagePath);
 
     /*
+     * Enqueue a pre-formatted NDJSON line for SIEM output. Thread-safe.
+     * Used for AV SIEM events that arrive with their own envelope format.
+     * If SIEM is disabled, this is a no-op.
+     */
+    void EnqueueRaw(const std::string& ndjsonLine);
+
+    /*
      * Flush remaining events and shut down the worker thread.
      * Blocks until all queued events are processed or 5 seconds elapse.
      */
@@ -78,6 +85,8 @@ private:
     struct QueueEntry {
         AKESOEDR_EVENT  evt;
         std::wstring    parentImagePath;
+        std::string     rawJson;    /* Non-empty = raw passthrough mode */
+        bool            isRaw = false;
     };
 
     std::deque<QueueEntry>  m_queue;

@@ -34,6 +34,7 @@
 #include "scanner/yara_scanner.h"
 #include "scanner/onaccess_scanner.h"
 #include "scanner/memory_scanner.h"
+#include "scanner/av_scanner.h"
 #include "output/siem_writer.h"
 #include "crossvalidation.h"
 
@@ -145,6 +146,7 @@ private:
     OnAccessScanner   m_onAccessScanner;
     MemoryScanner     m_memoryScanner;
     SiemWriter        m_siemWriter;
+    AVScanner         m_avScanner;
     CrossValidator    m_crossValidator;
     ULONGLONG         m_eventsProcessed = 0;
 

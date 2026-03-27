@@ -29,6 +29,8 @@ add_executable(akesoedr-agent
     scanner/yara_scanner.cpp
     scanner/onaccess_scanner.cpp
     scanner/memory_scanner.cpp
+    scanner/edr_shim.cpp
+    scanner/av_scanner.cpp
     output/siem_serializer.cpp
     output/siem_writer.cpp
     cmd_handler.cpp

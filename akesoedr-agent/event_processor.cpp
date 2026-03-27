@@ -41,6 +41,11 @@ EventProcessor::Init(const AkesoEDRConfig& cfg)
     /* Initialize SIEM output writer (P9-T5) */
     m_siemWriter.Init(m_config);
 
+    /* Initialize AV scanner with SIEM passthrough */
+    if (!m_avScanner.Init(m_config, &m_siemWriter)) {
+        std::printf("AkesoEDRAgent: WARNING: AV scanner init failed\n");
+    }
+
     /* Initialize cross-validator (P11-T5) */
     m_crossValidator.Init(&m_jsonWriter);
 
@@ -52,6 +57,7 @@ void
 EventProcessor::Shutdown()
 {
     m_siemWriter.Shutdown();
+    m_avScanner.Shutdown();
     m_memoryScanner.Shutdown();
     m_onAccessScanner.Shutdown();
     m_yaraScanner.Shutdown();
@@ -85,6 +91,19 @@ EventProcessor::Process(const AKESOEDR_EVENT& evt)
             std::wstring scanParent = m_processTable.GetParentImagePath(scanAlert);
             m_jsonWriter.WriteEvent(scanAlert, scanParent);
             PrintSummary(scanAlert);
+        }
+
+        /* AV scan for minifilter file events */
+        if (m_avScanner.IsAvailable()) {
+            AKESOEDR_EVENT avAlert = {};
+            if (m_avScanner.ScanFile(evt.Payload.File, avAlert)) {
+                m_eventsProcessed++;
+                std::wstring avParent = m_processTable.GetParentImagePath(avAlert);
+                m_jsonWriter.WriteEvent(avAlert, avParent);
+                m_siemWriter.Enqueue(avAlert, avParent);
+                PrintSummary(avAlert);
+                RecordAlert(avAlert);
+            }
         }
     }
 

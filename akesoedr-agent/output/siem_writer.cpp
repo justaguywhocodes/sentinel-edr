@@ -148,6 +148,24 @@ SiemWriter::Enqueue(const AKESOEDR_EVENT& evt,
 }
 
 void
+SiemWriter::EnqueueRaw(const std::string& ndjsonLine)
+{
+    if (!m_enabled || ndjsonLine.empty()) return;
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        QueueEntry entry{};
+        entry.rawJson = ndjsonLine;
+        entry.isRaw   = true;
+        m_queue.push_back(std::move(entry));
+    }
+
+    if (m_queue.size() >= m_batchSize) {
+        m_cv.notify_one();
+    }
+}
+
+void
 SiemWriter::Shutdown()
 {
     if (!m_enabled) return;
@@ -250,8 +268,12 @@ SiemWriter::WorkerLoop()
         ndjson.reserve(batch.size() * 1024);
 
         for (const auto& entry : batch) {
-            ndjson += SiemSerializeEvent(entry.evt, entry.parentImagePath,
-                                          m_hostname, m_agentId);
+            if (entry.isRaw) {
+                ndjson += entry.rawJson;
+            } else {
+                ndjson += SiemSerializeEvent(entry.evt, entry.parentImagePath,
+                                              m_hostname, m_agentId);
+            }
             ndjson += '\n';
         }
 

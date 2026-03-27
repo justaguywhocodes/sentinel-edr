@@ -12,6 +12,10 @@
 #define AKESOEDR_AV_SCANNER_H
 
 #include <windows.h>
+#include <string>
+#include <unordered_set>
+#include <chrono>
+#include <unordered_map>
 #include "edr_shim.h"
 #include "telemetry.h"
 
@@ -58,6 +62,13 @@ private:
     /* Static callback dispatched from AV engine */
     static void SiemCallbackStatic(const void* event, void* user_data);
     void OnSiemEvent(const void* event);
+
+    /* Cache of paths that failed with I/O error — skip for 60 seconds */
+    struct FailEntry {
+        std::chrono::steady_clock::time_point when;
+    };
+    std::unordered_map<std::wstring, FailEntry> m_failCache;
+    static constexpr int FAIL_CACHE_TTL_SEC = 60;
 };
 
 #endif /* AKESOEDR_AV_SCANNER_H */

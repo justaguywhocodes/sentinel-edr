@@ -122,13 +122,26 @@ AVScanner::ScanFile(const AKESOEDR_FILE_EVENT& fileEvt,
         (attrs & FILE_ATTRIBUTE_DIRECTORY))
         return false;
 
-    /* Verify we can actually open the file before sending to AV engine.
-     * Skips locked files (SQLite journals, UWP containers, etc.) */
+    /* Check fail cache — skip files that recently failed with I/O error */
+    std::wstring pathKey(win32Path);
+    {
+        auto it = m_failCache.find(pathKey);
+        if (it != m_failCache.end()) {
+            auto elapsed = std::chrono::steady_clock::now() - it->second.when;
+            if (elapsed < std::chrono::seconds(FAIL_CACHE_TTL_SEC))
+                return false;  /* Still in cooldown */
+            m_failCache.erase(it);  /* Expired — retry */
+        }
+    }
+
+    /* Verify we can actually open the file before sending to AV engine */
     HANDLE hTest = CreateFileW(win32Path, GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hTest == INVALID_HANDLE_VALUE)
+    if (hTest == INVALID_HANDLE_VALUE) {
+        m_failCache[pathKey] = { std::chrono::steady_clock::now() };
         return false;
+    }
     CloseHandle(hTest);
 
     /* Convert wide path to narrow for AV engine */
@@ -137,6 +150,16 @@ AVScanner::ScanFile(const AKESOEDR_FILE_EVENT& fileEvt,
                         narrowPath, sizeof(narrowPath), nullptr, nullptr);
 
     AVTelemetry result = m_avEngine.scan_file(narrowPath);
+
+    /* Cache I/O failures to avoid spamming the same file */
+    if (!result.av_detected && !result.av_available) {
+        m_failCache[pathKey] = { std::chrono::steady_clock::now() };
+        return false;
+    }
+    if (result.av_timeout) {
+        m_failCache[pathKey] = { std::chrono::steady_clock::now() };
+        return false;
+    }
 
     if (!result.av_detected)
         return false;
